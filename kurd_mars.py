@@ -13,8 +13,11 @@ import re
 from datetime import datetime
 from email.mime.text import MIMEText
 
-GMAIL_USER = ""
-GMAIL_APP_PASS = ""
+# ==========================================
+# EMAIL CONFIGURATION - USER MUST FILL
+# ==========================================
+GMAIL_USER = ""  # Enter your Gmail here
+GMAIL_APP_PASS = ""  # Enter your App Password here (16 characters)
 SCORE_FILE = ".antutu_score"
 
 def save_antutu_score(score):
@@ -233,23 +236,33 @@ def get_user_input(stdscr, y, x, prompt, mask=False):
     stdscr.timeout(timeout_ms)
     return input_str
 
+# ==========================================
+# TERMUX MENU
+# ==========================================
 def termux_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "📦 TERMUX TOOLS", curses.color_pair(5) | curses.A_BOLD)
+        
         safe_addstr(stdscr, 3, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(4))
         safe_addstr(stdscr, 4, 4, "│  [1] Termux Setup - Full Installation         │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 5, 4, "└───────────────────────────────────────────────┘", curses.color_pair(4))
+        
         safe_addstr(stdscr, 7, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 8, 4, "│  [2] Termux API - Install API Packages        │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 9, 4, "└───────────────────────────────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 11, 4, "[ Go Back ]", curses.color_pair(1) | curses.A_BOLD)
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
+        
         if key == ord('1'):
             termux_setup(stdscr)
         elif key == ord('2'):
@@ -267,31 +280,51 @@ def termux_menu(stdscr):
             except: pass
         elif key == ord('\n') or key == ord('q'):
             break
+    
     play_transition(stdscr)
 
 def termux_setup(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     stdscr.erase()
     safe_addstr(stdscr, 1, 4, "🔧 TERMUX FULL SETUP", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Starting full Termux setup...", curses.color_pair(2))
     safe_addstr(stdscr, 4, 4, "This may take a few minutes...", curses.color_pair(3))
     stdscr.refresh()
+    
     commands = [
-        "pkg update -y", "pkg upgrade -y", "pkg install python3 -y",
-        "pkg install python3-pip -y", "pkg install git -y", "pkg install curl -y",
-        "pkg install wget -y", "pkg install nano -y", "pkg install vim -y",
-        "pkg install termux-api -y", "pkg install termux-tools -y",
-        "pkg install openssh -y", "pkg install net-tools -y",
-        "pkg install dnsutils -y", "pkg install nmap -y",
-        "pkg install zip -y", "pkg install unzip -y", "pkg install tar -y",
-        "pkg install ncurses-utils -y", "pkg install termux-exec -y",
-        "pip install --upgrade pip", "pip install requests",
-        "pip install beautifulsoup4", "pip install colorama", "pip install tqdm"
+        "pkg update -y",
+        "pkg upgrade -y",
+        "pkg install python3 -y",
+        "pkg install python3-pip -y",
+        "pkg install git -y",
+        "pkg install curl -y",
+        "pkg install wget -y",
+        "pkg install nano -y",
+        "pkg install vim -y",
+        "pkg install termux-api -y",
+        "pkg install termux-tools -y",
+        "pkg install openssh -y",
+        "pkg install net-tools -y",
+        "pkg install dnsutils -y",
+        "pkg install nmap -y",
+        "pkg install zip -y",
+        "pkg install unzip -y",
+        "pkg install tar -y",
+        "pkg install ncurses-utils -y",
+        "pkg install termux-exec -y",
+        "pip install --upgrade pip",
+        "pip install requests",
+        "pip install beautifulsoup4",
+        "pip install colorama",
+        "pip install tqdm"
     ]
+    
     success_count = 0
     total = len(commands)
+    
     for idx, cmd in enumerate(commands):
         try:
             safe_addstr(stdscr, 6, 4, f"Processing: {idx+1}/{total} - {cmd[:30]}...", curses.color_pair(3))
@@ -301,7 +334,9 @@ def termux_setup(stdscr):
                 success_count += 1
         except:
             pass
+    
     safe_addstr(stdscr, 8, 4, f"✅ Setup Complete! {success_count}/{total} packages installed.", curses.color_pair(4) if success_count > total/2 else curses.color_pair(1))
+    
     safe_addstr(stdscr, 10, 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
@@ -312,21 +347,41 @@ def termux_api_install(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     stdscr.erase()
     safe_addstr(stdscr, 1, 4, "📦 TERMUX API INSTALLATION", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Installing Termux API packages...", curses.color_pair(2))
     stdscr.refresh()
+    
     api_packages = [
-        "termux-api", "termux-api-audio", "termux-api-battery",
-        "termux-api-camera", "termux-api-clipboard", "termux-api-contact",
-        "termux-api-dialog", "termux-api-download", "termux-api-fingerprint",
-        "termux-api-input", "termux-api-location", "termux-api-media",
-        "termux-api-microphone", "termux-api-notification", "termux-api-permission",
-        "termux-api-sensor", "termux-api-share", "termux-api-sms",
-        "termux-api-speech", "termux-api-telephony", "termux-api-toast",
-        "termux-api-vibrate", "termux-api-wallpaper", "termux-api-wifi"
+        "termux-api",
+        "termux-api-audio",
+        "termux-api-battery",
+        "termux-api-camera",
+        "termux-api-clipboard",
+        "termux-api-contact",
+        "termux-api-dialog",
+        "termux-api-download",
+        "termux-api-fingerprint",
+        "termux-api-input",
+        "termux-api-location",
+        "termux-api-media",
+        "termux-api-microphone",
+        "termux-api-notification",
+        "termux-api-permission",
+        "termux-api-sensor",
+        "termux-api-share",
+        "termux-api-sms",
+        "termux-api-speech",
+        "termux-api-telephony",
+        "termux-api-toast",
+        "termux-api-vibrate",
+        "termux-api-wallpaper",
+        "termux-api-wifi"
     ]
+    
     success_count = 0
+    
     for idx, pkg in enumerate(api_packages):
         try:
             safe_addstr(stdscr, 5, 4, f"Installing: {pkg} ({idx+1}/{len(api_packages)})", curses.color_pair(3))
@@ -341,30 +396,42 @@ def termux_api_install(stdscr):
         except:
             safe_addstr(stdscr, 6 + idx, 6, f"❌ {pkg} timeout", curses.color_pair(1))
             stdscr.refresh()
+    
     safe_addstr(stdscr, 8 + len(api_packages), 4, f"✅ API Installation Complete! {success_count}/{len(api_packages)} packages installed.", curses.color_pair(4))
+    
     safe_addstr(stdscr, 10 + len(api_packages), 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
     stdscr.getch()
     play_transition(stdscr)
 
+# ==========================================
+# DEVICES MENU - ADB & FASTBOOT
+# ==========================================
 def devices_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "🔌 DEVICES CONTROL", curses.color_pair(5) | curses.A_BOLD)
+        
         safe_addstr(stdscr, 3, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(4))
         safe_addstr(stdscr, 4, 4, "│  [1] ADB - Android Debug Bridge              │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 5, 4, "└───────────────────────────────────────────────┘", curses.color_pair(4))
+        
         safe_addstr(stdscr, 7, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 8, 4, "│  [2] FASTBOOT - Bootloader Mode              │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 9, 4, "└───────────────────────────────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 11, 4, "[ Go Back ]", curses.color_pair(1) | curses.A_BOLD)
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
+        
         if key == ord('1'):
             adb_menu(stdscr)
         elif key == ord('2'):
@@ -382,25 +449,33 @@ def devices_menu(stdscr):
             except: pass
         elif key == ord('\n') or key == ord('q'):
             break
+    
     play_transition(stdscr)
 
 def adb_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "🔧 ADB - Android Debug Bridge", curses.color_pair(5) | curses.A_BOLD)
+        
         safe_addstr(stdscr, 3, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(4))
         safe_addstr(stdscr, 4, 4, "│  [1] Connect USB Device                      │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 5, 4, "└───────────────────────────────────────────────┘", curses.color_pair(4))
+        
         safe_addstr(stdscr, 7, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 8, 4, "│  [2] Connect Wireless (IP:Port)             │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 9, 4, "└───────────────────────────────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 11, 4, "[ Go Back ]", curses.color_pair(1) | curses.A_BOLD)
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
+        
         if key == ord('1'):
             adb_usb_connect(stdscr)
         elif key == ord('2'):
@@ -418,29 +493,35 @@ def adb_menu(stdscr):
             except: pass
         elif key == ord('\n') or key == ord('q'):
             break
+    
     play_transition(stdscr)
 
 def adb_usb_connect(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     try:
         subprocess.run("pkg install termux-android-tools -y", shell=True, timeout=30)
         subprocess.run("pkg install termux-api -y", shell=True, timeout=30)
     except: pass
+    
     stdscr.erase()
     safe_addstr(stdscr, 1, 4, "🔌 USB CONNECTION", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Checking for USB devices...", curses.color_pair(2))
     stdscr.refresh()
+    
     try:
         result = subprocess.run("adb devices", shell=True, capture_output=True, text=True, timeout=10)
         output = result.stdout + result.stderr
+        
         if "device" in output.lower() and "list" in output.lower():
             lines = output.split('\n')
             devices_found = []
             for line in lines:
                 if "device" in line.lower() and "list" not in line.lower():
                     devices_found.append(line.strip())
+            
             if devices_found:
                 safe_addstr(stdscr, 5, 4, "✅ Devices Connected:", curses.color_pair(4) | curses.A_BOLD)
                 for idx, dev in enumerate(devices_found[:5]):
@@ -458,6 +539,7 @@ def adb_usb_connect(stdscr):
             safe_addstr(stdscr, 7, 4, "✅ ADB installed! Please reconnect.", curses.color_pair(4))
         except:
             safe_addstr(stdscr, 7, 4, "❌ Failed to install ADB", curses.color_pair(1))
+    
     safe_addstr(stdscr, 12, 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
@@ -468,22 +550,29 @@ def adb_wireless_connect(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(-1)
+    
     stdscr.erase()
     safe_addstr(stdscr, 1, 4, "📶 WIRELESS ADB CONNECTION", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Enter IP:Port (e.g., 192.168.1.100:5555)", curses.color_pair(2))
     safe_addstr(stdscr, 4, 4, "Format: IP:PORT", curses.color_pair(3))
+    
     ip_input = get_user_input(stdscr, 6, 4, "IP:Port: ", mask=False)
+    
     if ip_input and ':' in ip_input:
         try:
             subprocess.run("pkg install termux-android-tools -y", shell=True, timeout=30)
+            
             stdscr.erase()
             safe_addstr(stdscr, 1, 4, f"🔗 Connecting to {ip_input}...", curses.color_pair(4))
             stdscr.refresh()
+            
             result = subprocess.run(f"adb connect {ip_input}", shell=True, capture_output=True, text=True, timeout=15)
             output = result.stdout + result.stderr
+            
             if "connected" in output.lower():
                 safe_addstr(stdscr, 3, 4, "✅ Connected successfully!", curses.color_pair(4))
                 safe_addstr(stdscr, 4, 4, f"📱 Device: {ip_input}", curses.color_pair(2))
+                
                 result2 = subprocess.run("adb devices", shell=True, capture_output=True, text=True, timeout=5)
                 safe_addstr(stdscr, 6, 4, "📋 Connected Devices:", curses.color_pair(3))
                 lines = result2.stdout.split('\n')
@@ -497,6 +586,7 @@ def adb_wireless_connect(stdscr):
             safe_addstr(stdscr, 3, 4, f"❌ Error: {str(e)[:40]}", curses.color_pair(1))
     else:
         safe_addstr(stdscr, 8, 4, "❌ Invalid format! Use IP:PORT", curses.color_pair(1))
+    
     safe_addstr(stdscr, 12, 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
@@ -508,17 +598,21 @@ def fastboot_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     try:
         subprocess.run("pkg install android-tools -y", shell=True, timeout=60)
         subprocess.run("pkg install termux-api -y", shell=True, timeout=30)
     except: pass
+    
     stdscr.erase()
     safe_addstr(stdscr, 1, 4, "⚡ FASTBOOT MODE", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Checking for Fastboot devices...", curses.color_pair(2))
     stdscr.refresh()
+    
     try:
         result = subprocess.run("fastboot devices", shell=True, capture_output=True, text=True, timeout=10)
         output = result.stdout + result.stderr
+        
         if output.strip():
             safe_addstr(stdscr, 5, 4, "✅ Devices Found:", curses.color_pair(4) | curses.A_BOLD)
             lines = output.split('\n')
@@ -528,9 +622,11 @@ def fastboot_menu(stdscr):
         else:
             safe_addstr(stdscr, 5, 4, "⏳ Waiting for Fastboot device...", curses.color_pair(3))
             safe_addstr(stdscr, 6, 4, "Connect USB and boot into Fastboot mode", curses.color_pair(1))
+            
             safe_addstr(stdscr, 8, 4, "Attempting to detect device...", curses.color_pair(2))
             stdscr.refresh()
             time.sleep(3)
+            
             result2 = subprocess.run("fastboot devices", shell=True, capture_output=True, text=True, timeout=5)
             if result2.stdout.strip():
                 safe_addstr(stdscr, 10, 4, "✅ Device detected!", curses.color_pair(4))
@@ -542,6 +638,7 @@ def fastboot_menu(stdscr):
             safe_addstr(stdscr, 7, 4, "✅ Fastboot installed! Please reconnect.", curses.color_pair(4))
         except:
             safe_addstr(stdscr, 7, 4, "❌ Failed to install Fastboot", curses.color_pair(1))
+    
     safe_addstr(stdscr, 14, 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
@@ -624,37 +721,49 @@ def wifi_settings_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "📶 WIFI SETTINGS", curses.color_pair(5) | curses.A_BOLD)
+        
         info = get_wifi_info()
         dbm = info['dbm']
         ssid = info['ssid']
         quality = get_signal_quality(dbm)
+        
         safe_addstr(stdscr, 3, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
         safe_addstr(stdscr, 4, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 5, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+        
         bar_length = 35
         filled = int((dbm + 100) / 50 * bar_length)
         filled = max(0, min(bar_length, filled))
         bar = "█" * filled + "░" * (bar_length - filled)
         safe_addstr(stdscr, 7, 4, f"[{bar}]", curses.color_pair(3))
+        
         safe_addstr(stdscr, 9, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(4))
         safe_addstr(stdscr, 10, 4, "│  [1] WIFI AR - Signal Strength Monitor      │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 11, 4, "└───────────────────────────────────────────────┘", curses.color_pair(4))
+        
         safe_addstr(stdscr, 13, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 14, 4, "│  [2] WIFI SCANNER - Connected Devices       │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 15, 4, "└───────────────────────────────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 17, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(5))
         safe_addstr(stdscr, 18, 4, "│  [3] WIFI LOCATION - Network Location        │", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 19, 4, "└───────────────────────────────────────────────┘", curses.color_pair(5))
+        
         safe_addstr(stdscr, 21, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(2))
         safe_addstr(stdscr, 22, 4, "│  [4] Scan Nearby Networks                   │", curses.color_pair(2) | curses.A_BOLD)
         safe_addstr(stdscr, 23, 4, "└───────────────────────────────────────────────┘", curses.color_pair(2))
+        
         safe_addstr(stdscr, 25, 4, "[ Go Back ]", curses.color_pair(1) | curses.A_BOLD)
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
+        
         if key == ord('1'):
             wifi_ar_monitor(stdscr)
         elif key == ord('2'):
@@ -680,35 +789,45 @@ def wifi_settings_menu(stdscr):
             except: pass
         elif key == ord('\n') or key == ord('q'):
             break
+    
     play_transition(stdscr)
 
 def wifi_ar_monitor(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(300)
+    
     running = True
     while running:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "📡 WIFI AR - Signal Monitor", curses.color_pair(5) | curses.A_BOLD)
+        
         info = get_wifi_info()
         dbm = info['dbm']
         ssid = info['ssid']
         quality = get_signal_quality(dbm)
+        
         safe_addstr(stdscr, 4, 4, f"SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
         safe_addstr(stdscr, 6, 4, f"{dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
+        
         bar_length = 45
         filled = int((dbm + 100) / 50 * bar_length)
         filled = max(0, min(bar_length, filled))
         bar = "█" * filled + "░" * (bar_length - filled)
         safe_addstr(stdscr, 8, 4, f"[{bar}]", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+        
         safe_addstr(stdscr, 10, 4, f"Quality: {quality}", curses.color_pair(2))
         safe_addstr(stdscr, 11, 4, f"Last updated: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(3))
+        
         safe_addstr(stdscr, 13, 4, "Press any key to stop...", curses.color_pair(1))
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
         if key != -1:
             running = False
+    
     stdscr.timeout(timeout_ms)
     play_transition(stdscr)
 
@@ -716,16 +835,22 @@ def wifi_scanner(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     devices = scan_wifi_devices()
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, f"📱 WIFI SCANNER - {len(devices)} Devices Found", curses.color_pair(5) | curses.A_BOLD)
+        
         for idx, dev in enumerate(devices[:8]):
             color = curses.color_pair(2) if idx == 0 else curses.color_pair(3)
             safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {dev['ip'][:15]} | {dev['mac']} | {dev['name'][:10]}", color)
+        
         safe_addstr(stdscr, 14, 4, "[R] Rescan  |  [D] Remove Device  |  [G] Go Back", curses.color_pair(3))
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
         if key == ord('r') or key == ord('R'):
             devices = scan_wifi_devices()
@@ -753,24 +878,31 @@ def wifi_scanner(stdscr):
                     if my == 14:
                         break
             except: pass
+    
     play_transition(stdscr)
 
 def wifi_location(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "📍 WIFI LOCATION", curses.color_pair(5) | curses.A_BOLD)
+        
         location = get_wifi_location()
         info = get_wifi_info()
+        
         safe_addstr(stdscr, 4, 4, f"📍 City: {location}", curses.color_pair(2) | curses.A_BOLD)
         safe_addstr(stdscr, 5, 4, f"📶 SSID: {info['ssid']}", curses.color_pair(3))
         safe_addstr(stdscr, 6, 4, f"📊 Signal: {info['dbm']} dBm", curses.color_pair(4))
         safe_addstr(stdscr, 7, 4, f"⭐ Quality: {get_signal_quality(info['dbm'])}", curses.color_pair(2))
+        
         safe_addstr(stdscr, 9, 4, "[1] Get IP Location  |  [2] Network Info  |  [G] Go Back", curses.color_pair(3))
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
         if key == ord('1'):
             curses.endwin()
@@ -810,30 +942,39 @@ def wifi_location(stdscr):
                     if my == 9:
                         break
             except: pass
+    
     play_transition(stdscr)
 
 def scan_nearby(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     stdscr.erase()
     safe_addstr(stdscr, 1, 4, "📡 Scanning Nearby Networks...", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Please wait...", curses.color_pair(2))
     stdscr.refresh()
+    
     networks = scan_wifi_networks()
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, f"📡 Nearby Networks - {len(networks)} Found", curses.color_pair(5) | curses.A_BOLD)
+        
         for idx, ssid in enumerate(networks[:8]):
             safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {ssid}", curses.color_pair(2))
+        
         safe_addstr(stdscr, 14, 4, "[R] Rescan  |  [G] Go Back", curses.color_pair(3))
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
         if key == ord('r') or key == ord('R'):
             networks = scan_wifi_networks()
         elif key == ord('g') or key == ord('G') or key == ord('\n'):
             break
+    
     play_transition(stdscr)
 
 def youtube_stats_menu(stdscr):
@@ -1160,50 +1301,64 @@ def settings_menu(stdscr):
     global current_hz, current_fps, timeout_ms, selected_hz, selected_fps
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
+    
     selected_hz = current_hz
     selected_fps = current_fps
     error_msg = ""
     clear_msg = ""
+    
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "⚙️ ADVANCED SETTINGS", curses.color_pair(5) | curses.A_BOLD)
+        
         safe_addstr(stdscr, 3, 4, "━━━ GRAPHICS SETTINGS ━━━", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 4, 4, f"Active Mode: {current_hz}Hz | Render: {current_fps} FPS", curses.color_pair(3))
         if error_msg:
             safe_addstr(stdscr, 6, 4, f"⚠️ {error_msg}", curses.color_pair(1) | curses.A_BOLD)
+        
         safe_addstr(stdscr, 8, 4, "Refresh Rate (Hz):", curses.color_pair(2) | curses.A_BOLD)
         hz60_attr = curses.color_pair(3) | curses.A_REVERSE if selected_hz == 60 else curses.color_pair(2)
         hz120_attr = curses.color_pair(3) | curses.A_REVERSE if selected_hz == 120 else curses.color_pair(2)
         safe_addstr(stdscr, 9, 4, "[ 60Hz ]", hz60_attr)
         safe_addstr(stdscr, 9, 16, "[ 120Hz ]", hz120_attr)
+        
         safe_addstr(stdscr, 11, 4, "Target FPS:", curses.color_pair(2) | curses.A_BOLD)
         fps_list = [10, 20, 30, 45, 60, 90, 120]
         for idx, f_val in enumerate(fps_list):
             f_attr = curses.color_pair(5) | curses.A_REVERSE if selected_fps == f_val else curses.color_pair(2)
             safe_addstr(stdscr, 12 + (idx // 4) * 2, 4 + (idx % 4) * 12, f"[ {f_val}fps ]", f_attr)
+        
         safe_addstr(stdscr, 16, 4, "━━━ TOOL MAINTENANCE ━━━", curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(stdscr, 17, 4, "┌─────────────────────────────────────────────┐", curses.color_pair(1))
         safe_addstr(stdscr, 18, 4, "│  [CLEAR]  Fix BUGs & Freeze Issues         │", curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(stdscr, 19, 4, "└─────────────────────────────────────────────┘", curses.color_pair(1))
+        
         if clear_msg:
             safe_addstr(stdscr, 21, 4, f"✅ {clear_msg}", curses.color_pair(4))
+        
         safe_addstr(stdscr, 23, 4, "┌─────────────────────────────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 24, 4, "│          [ APPLY CHANGES ⚡ ]               │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 25, 4, "└─────────────────────────────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 27, 4, "[ Go Back ]", curses.color_pair(1) | curses.A_BOLD)
+        
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
+        
         if key == curses.KEY_MOUSE:
             try:
                 _, mx, my, _, bstate = curses.getmouse()
                 if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
                     error_msg = ""
+                    
                     if my == 9:
                         if 4 <= mx <= 12:
                             selected_hz = 60
                         elif 16 <= mx <= 25:
                             selected_hz = 120
+                    
                     elif my == 12:
                         if 4 <= mx <= 13:
                             selected_fps = 10
@@ -1220,6 +1375,7 @@ def settings_menu(stdscr):
                             selected_fps = 90
                         elif 28 <= mx <= 37:
                             selected_fps = 120
+                    
                     elif 17 <= my <= 19 and 4 <= mx <= 44:
                         play_button_shrink(stdscr, 17, 4, "┌─────────────────────────────────────────────┐", 1)
                         try:
@@ -1230,6 +1386,7 @@ def settings_menu(stdscr):
                             stdscr.timeout(timeout_ms)
                         except:
                             clear_msg = "Clean failed, restart tool."
+                    
                     elif 23 <= my <= 25 and 4 <= mx <= 44:
                         play_button_shrink(stdscr, 23, 4, "┌─────────────────────────────────────────────┐", 3)
                         saved_score = load_antutu_score()
@@ -1248,10 +1405,13 @@ def settings_menu(stdscr):
                             current_fps = selected_fps
                             update_timeout()
                             clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS ✅"
+                        
                         stdscr.timeout(timeout_ms)
+                    
                     elif my == 27:
                         break
             except: pass
+        
         elif key == ord('c') or key == ord('C'):
             try:
                 import gc
@@ -1260,6 +1420,7 @@ def settings_menu(stdscr):
                 clear_msg = "Tool cleaned! ✅"
             except:
                 clear_msg = "Clean failed."
+        
         elif key == ord('a') or key == ord('A'):
             saved_score = load_antutu_score()
             if selected_fps == 120:
@@ -1277,6 +1438,7 @@ def settings_menu(stdscr):
                 current_fps = selected_fps
                 update_timeout()
                 clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS ✅"
+        
         elif key == ord('\n'):
             break
 
@@ -1287,41 +1449,60 @@ def main(stdscr):
     curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
     curses.curs_set(0)
     stdscr.timeout(timeout_ms)
+    
     while True:
         stdscr.erase()
         print_kurd_mars_logo(stdscr)
+        
         safe_addstr(stdscr, 8, 4,  "┌───────────────────────┐", curses.color_pair(5))
         safe_addstr(stdscr, 9, 4,  "│   Termux & Kali       │", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 10, 4, "└───────────────────────┘", curses.color_pair(5))
+        
         safe_addstr(stdscr, 8, 30, "┌───────────────────────┐", curses.color_pair(4))
         safe_addstr(stdscr, 9, 30, "│     Test Game         │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 10, 30, "└───────────────────────┘", curses.color_pair(4))
+        
         safe_addstr(stdscr, 11, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 12, 4, "│          [ TEST ANTUTU v11 ]               │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 13, 4, "└───────────────────────────────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 14, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(1))
         safe_addstr(stdscr, 15, 4, "│          [ USERNAME OSINT (PASSWORD) ]     │", curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(stdscr, 16, 4, "└───────────────────────────────────────────────┘", curses.color_pair(1))
+        
         safe_addstr(stdscr, 17, 4, "┌───────────────────────────────────────────────┐", curses.color_pair(5))
         safe_addstr(stdscr, 18, 4, "│          [ YOUTUBE BY NAME ]               │", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 19, 4, "└───────────────────────────────────────────────┘", curses.color_pair(5))
+        
         safe_addstr(stdscr, 20, 4, "┌───────────────────────┐", curses.color_pair(4))
         safe_addstr(stdscr, 21, 4, "│   Hardware Panel      │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 22, 4, "└───────────────────────┘", curses.color_pair(4))
+        
         safe_addstr(stdscr, 20, 30, "┌───────────────────────┐", curses.color_pair(5))
         safe_addstr(stdscr, 21, 30, "│   WiFi Settings 📶   │", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 22, 30, "└───────────────────────┘", curses.color_pair(5))
+        
         safe_addstr(stdscr, 23, 4, "┌───────────────────────┐", curses.color_pair(2))
         safe_addstr(stdscr, 24, 4, "│   Termux Tools 📦    │", curses.color_pair(2) | curses.A_BOLD)
         safe_addstr(stdscr, 25, 4, "└───────────────────────┘", curses.color_pair(2))
+        
         safe_addstr(stdscr, 23, 30, "┌───────────────────────┐", curses.color_pair(3))
         safe_addstr(stdscr, 24, 30, "│    Advanced Settings  │", curses.color_pair(3) | curses.A_BOLD)
         safe_addstr(stdscr, 25, 30, "└───────────────────────┘", curses.color_pair(3))
+        
         safe_addstr(stdscr, 23, 55, "┌───────────────────────┐", curses.color_pair(1))
         safe_addstr(stdscr, 24, 55, "│       [ Exit ]        │", curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(stdscr, 25, 55, "└───────────────────────┘", curses.color_pair(1))
+
+        # ===== NEW SECTION ADDED: termux main menu button =====
+        safe_addstr(stdscr, 26, 4, "┌───────────────────────┐", curses.color_pair(4))
+        safe_addstr(stdscr, 27, 4, "│       termux          │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 28, 4, "└───────────────────────┘", curses.color_pair(4))
+        # ======================================================
+
         stdscr.noutrefresh()
         curses.doupdate()
+        
         key = stdscr.getch()
         if key == curses.KEY_MOUSE:
             try:
@@ -1356,6 +1537,11 @@ def main(stdscr):
                         settings_menu(stdscr)
                     elif 23 <= my <= 25 and 55 <= mx <= 78:
                         break
+                    # ===== NEW MOUSE HANDLER FOR termux BUTTON =====
+                    elif 26 <= my <= 28 and 4 <= mx <= 28:
+                        play_button_shrink(stdscr, 26, 4, "┌───────────────────────┐", 4)
+                        termux_menu(stdscr)
+                    # ===============================================
             except: pass
 
 if __name__ == "__main__":
