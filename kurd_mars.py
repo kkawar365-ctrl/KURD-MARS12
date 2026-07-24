@@ -68,26 +68,13 @@ def vibrate_phone(duration=500):
 def scan_wifi_networks():
     networks = []
     try:
-        cmd = "su -c 'cmd wifi list-scan-results'"
-        result = subprocess.check_output(cmd, shell=True, timeout=8).decode("utf-8", errors="ignore")
-        for line in result.split("\n"):
-            line = line.strip()
-            if line and not line.startswith("BSSID") and not line.startswith("---"):
-                parts = line.split()
-                if len(parts) >= 5:
-                    ssid = " ".join(parts[4:])
-                    if ssid and not ssid.startswith("\\x00") and "<illegal" not in ssid:
-                        networks.append(ssid)
+        result = subprocess.check_output("termux-wifi-scaninfo", shell=True, timeout=8).decode("utf-8")
+        data = json.loads(result)
+        for net in data:
+            ssid = net.get("ssid", "").strip()
+            if ssid and not ssid.startswith("\\x00"):
+                networks.append(ssid)
     except: pass
-    if not networks:
-        try:
-            result = subprocess.check_output("termux-wifi-scaninfo", shell=True, timeout=8).decode("utf-8")
-            data = json.loads(result)
-            for net in data:
-                ssid = net.get("ssid", "").strip()
-                if ssid and not ssid.startswith("\\x00"):
-                    networks.append(ssid)
-        except: pass
     return list(set(networks))[:8]
 
 def connect_to_wifi(ssid, password):
@@ -284,19 +271,14 @@ def update_tool(stdscr):
     time.sleep(0.5)
     
     try:
-        # یەکەم هەنگاو: git fetch
         safe_addstr(stdscr, 4, width//2 - 10, "[1/3] Fetching updates...", curses.color_pair(3))
         stdscr.refresh()
-        
         fetch = subprocess.run("git fetch", shell=True, capture_output=True, text=True, timeout=10)
         
-        # دووەم هەنگاو: git status
         safe_addstr(stdscr, 5, width//2 - 10, "[2/3] Checking changes...", curses.color_pair(3))
         stdscr.refresh()
-        
         status = subprocess.run("git status -uno", shell=True, capture_output=True, text=True, timeout=5)
         
-        # پشکنینی ئەگەر ئەپدەیت هەیە
         if "Your branch is up to date" in status.stdout or "up to date" in status.stdout:
             safe_addstr(stdscr, 7, width//2 - 15, "✅ NO UPDATE AVAILABLE", curses.color_pair(4) | curses.A_BOLD)
             safe_addstr(stdscr, 8, width//2 - 15, "Your tool is already up to date!", curses.color_pair(2))
@@ -304,11 +286,9 @@ def update_tool(stdscr):
             time.sleep(2)
             return False
         
-        # سێیەم هەنگاو: git pull (Progress Bar)
         safe_addstr(stdscr, 7, width//2 - 10, "[3/3] Updating... (0%)", curses.color_pair(3))
         stdscr.refresh()
         
-        # Progress Bar simulation
         for i in range(101):
             if i % 5 == 0:
                 bar_length = 40
@@ -318,7 +298,6 @@ def update_tool(stdscr):
                 stdscr.refresh()
             time.sleep(0.02)
         
-        # Git pull لە پشتەوە
         pull = subprocess.run("git pull", shell=True, capture_output=True, text=True, timeout=30)
         
         if "Already up to date" in pull.stdout:
@@ -328,11 +307,9 @@ def update_tool(stdscr):
             time.sleep(2)
             return False
         
-        # ئەپدەیت سەرکەوتوو بوو
         safe_addstr(stdscr, 11, width//2 - 15, "✅ UPDATE COMPLETED SUCCESSFULLY!", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 12, width//2 - 15, "Tool has been updated to the latest version!", curses.color_pair(2))
         
-        # وەرگرتنی ژمارەی ڤێرژن
         try:
             version = subprocess.run("git log -1 --pretty=format:'%h - %s (%ar)'", shell=True, capture_output=True, text=True, timeout=5)
             safe_addstr(stdscr, 14, width//2 - 15, f"📌 New version: {version.stdout[:40]}", curses.color_pair(5))
@@ -679,27 +656,19 @@ def fastboot_command_mode(stdscr):
     play_transition(stdscr)
 
 # ==========================================
-# WIFI FUNCTIONS
+# WIFI FUNCTIONS - چاککراوە (بەبێ dumpsys)
 # ==========================================
-def get_wifi_dbm():
-    try:
-        result = subprocess.check_output("termux-wifi-connectioninfo", shell=True, timeout=5).decode()
-        data = json.loads(result)
-        if 'rssi' in data:
-            return data['rssi']
-    except: pass
-    return -70
-
 def get_wifi_info():
     info = {'ssid': 'Unknown', 'dbm': -70, 'quality': 'Poor'}
     try:
-        result = subprocess.check_output("termux-wifi-connectioninfo", shell=True, timeout=5).decode()
+        result = subprocess.check_output("termux-wifi-connectioninfo", shell=True, timeout=3).decode()
         data = json.loads(result)
         if 'ssid' in data:
             info['ssid'] = data['ssid']
         if 'rssi' in data:
             info['dbm'] = data['rssi']
-    except: pass
+    except:
+        pass
     dbm = info['dbm']
     if dbm >= -50:
         info['quality'] = "Excellent"
@@ -723,7 +692,7 @@ def get_signal_quality(dbm):
 def scan_wifi_devices():
     devices = []
     try:
-        result = subprocess.check_output("arp -a", shell=True, timeout=5).decode()
+        result = subprocess.check_output("arp -a", shell=True, timeout=3).decode()
         for line in result.split('\n'):
             if '(' in line and ')' in line:
                 parts = line.split()
@@ -738,90 +707,96 @@ def scan_wifi_devices():
 
 def get_wifi_location():
     try:
-        result = subprocess.check_output("curl -s ipinfo.io/city", shell=True, timeout=5).decode().strip()
+        result = subprocess.check_output("curl -s ipinfo.io/city", shell=True, timeout=3).decode().strip()
         if result and len(result) > 2:
             return result
     except: pass
     return "Unknown"
 
+# ==========================================
+# WIFI SETTINGS MENU - چاککراوە
+# ==========================================
 def wifi_settings_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     while True:
-        stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "📶 WIFI SETTINGS", curses.color_pair(5) | curses.A_BOLD)
-        
-        info = get_wifi_info()
-        dbm = info['dbm']
-        ssid = info['ssid']
-        quality = get_signal_quality(dbm)
-        
-        safe_addstr(stdscr, 3, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 4, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 5, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
-        
-        bar_length = 35
-        filled = int((dbm + 100) / 50 * bar_length)
-        filled = max(0, min(bar_length, filled))
-        bar = "█" * filled + "░" * (bar_length - filled)
-        safe_addstr(stdscr, 7, 4, f"[{bar}]", curses.color_pair(3))
-        
-        safe_addstr(stdscr, 9, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 10, 4, "│  [1] WIFI AR - Signal Strength Monitor      │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 11, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
-        
-        safe_addstr(stdscr, 13, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
-        safe_addstr(stdscr, 14, 4, "│  [2] WIFI SCANNER - Connected Devices       │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 15, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
-        
-        safe_addstr(stdscr, 17, 4, "┌" + "─" * 50 + "┐", curses.color_pair(5))
-        safe_addstr(stdscr, 18, 4, "│  [3] WIFI LOCATION - Network Location        │", curses.color_pair(5) | curses.A_BOLD)
-        safe_addstr(stdscr, 19, 4, "└" + "─" * 50 + "┘", curses.color_pair(5))
-        
-        safe_addstr(stdscr, 21, 4, "┌" + "─" * 50 + "┐", curses.color_pair(2))
-        safe_addstr(stdscr, 22, 4, "│  [4] Scan Nearby Networks                   │", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 23, 4, "└" + "─" * 50 + "┘", curses.color_pair(2))
-        
-        safe_addstr(stdscr, 25, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
-        safe_addstr(stdscr, 26, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 27, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
-        
-        stdscr.noutrefresh()
-        curses.doupdate()
-        
-        key = stdscr.getch()
-        
-        if key == ord('1'):
-            wifi_ar_monitor(stdscr)
-        elif key == ord('2'):
-            wifi_scanner(stdscr)
-        elif key == ord('3'):
-            wifi_location(stdscr)
-        elif key == ord('4'):
-            scan_nearby(stdscr)
-        elif key == curses.KEY_MOUSE:
-            try:
-                _, mx, my, _, bstate = curses.getmouse()
-                if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
-                    if 25 <= my <= 27 and 4 <= mx <= 24:
-                        break
-                    elif 9 <= my <= 11 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 9, 4, "┌" + "─" * 50 + "┐", 4)
-                        wifi_ar_monitor(stdscr)
-                    elif 13 <= my <= 15 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 13, 4, "┌" + "─" * 50 + "┐", 3)
-                        wifi_scanner(stdscr)
-                    elif 17 <= my <= 19 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 17, 4, "┌" + "─" * 50 + "┐", 5)
-                        wifi_location(stdscr)
-                    elif 21 <= my <= 23 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 21, 4, "┌" + "─" * 50 + "┐", 2)
-                        scan_nearby(stdscr)
-            except: pass
-        elif key == ord('\n') or key == ord('q'):
-            break
+        try:
+            stdscr.erase()
+            safe_addstr(stdscr, 1, 4, "📶 WIFI SETTINGS", curses.color_pair(5) | curses.A_BOLD)
+            
+            info = get_wifi_info()
+            dbm = info['dbm']
+            ssid = info['ssid']
+            quality = get_signal_quality(dbm)
+            
+            safe_addstr(stdscr, 3, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 4, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
+            safe_addstr(stdscr, 5, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+            
+            bar_length = 35
+            filled = int((dbm + 100) / 50 * bar_length)
+            filled = max(0, min(bar_length, filled))
+            bar = "█" * filled + "░" * (bar_length - filled)
+            safe_addstr(stdscr, 7, 4, f"[{bar}]", curses.color_pair(3))
+            
+            safe_addstr(stdscr, 9, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
+            safe_addstr(stdscr, 10, 4, "│  [1] WIFI AR - Signal Strength Monitor      │", curses.color_pair(4) | curses.A_BOLD)
+            safe_addstr(stdscr, 11, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
+            
+            safe_addstr(stdscr, 13, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
+            safe_addstr(stdscr, 14, 4, "│  [2] WIFI SCANNER - Connected Devices       │", curses.color_pair(3) | curses.A_BOLD)
+            safe_addstr(stdscr, 15, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
+            
+            safe_addstr(stdscr, 17, 4, "┌" + "─" * 50 + "┐", curses.color_pair(5))
+            safe_addstr(stdscr, 18, 4, "│  [3] WIFI LOCATION - Network Location        │", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 19, 4, "└" + "─" * 50 + "┘", curses.color_pair(5))
+            
+            safe_addstr(stdscr, 21, 4, "┌" + "─" * 50 + "┐", curses.color_pair(2))
+            safe_addstr(stdscr, 22, 4, "│  [4] Scan Nearby Networks                   │", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 23, 4, "└" + "─" * 50 + "┘", curses.color_pair(2))
+            
+            safe_addstr(stdscr, 25, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
+            safe_addstr(stdscr, 26, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
+            safe_addstr(stdscr, 27, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
+            
+            stdscr.noutrefresh()
+            curses.doupdate()
+            
+            key = stdscr.getch()
+            
+            if key == ord('1'):
+                wifi_ar_monitor(stdscr)
+            elif key == ord('2'):
+                wifi_scanner(stdscr)
+            elif key == ord('3'):
+                wifi_location(stdscr)
+            elif key == ord('4'):
+                scan_nearby(stdscr)
+            elif key == curses.KEY_MOUSE:
+                try:
+                    _, mx, my, _, bstate = curses.getmouse()
+                    if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                        if 25 <= my <= 27 and 4 <= mx <= 24:
+                            break
+                        elif 9 <= my <= 11 and 4 <= mx <= 54:
+                            play_button_shrink(stdscr, 9, 4, "┌" + "─" * 50 + "┐", 4)
+                            wifi_ar_monitor(stdscr)
+                        elif 13 <= my <= 15 and 4 <= mx <= 54:
+                            play_button_shrink(stdscr, 13, 4, "┌" + "─" * 50 + "┐", 3)
+                            wifi_scanner(stdscr)
+                        elif 17 <= my <= 19 and 4 <= mx <= 54:
+                            play_button_shrink(stdscr, 17, 4, "┌" + "─" * 50 + "┐", 5)
+                            wifi_location(stdscr)
+                        elif 21 <= my <= 23 and 4 <= mx <= 54:
+                            play_button_shrink(stdscr, 21, 4, "┌" + "─" * 50 + "┐", 2)
+                            scan_nearby(stdscr)
+                except: pass
+            elif key == ord('\n') or key == ord('q'):
+                break
+        except:
+            pass
     
     play_transition(stdscr)
 
@@ -832,33 +807,36 @@ def wifi_ar_monitor(stdscr):
     
     running = True
     while running:
-        stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "📡 WIFI AR - Signal Monitor", curses.color_pair(5) | curses.A_BOLD)
-        
-        info = get_wifi_info()
-        dbm = info['dbm']
-        ssid = info['ssid']
-        quality = get_signal_quality(dbm)
-        
-        safe_addstr(stdscr, 4, 4, f"SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 6, 4, f"{dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
-        
-        bar_length = 45
-        filled = int((dbm + 100) / 50 * bar_length)
-        filled = max(0, min(bar_length, filled))
-        bar = "█" * filled + "░" * (bar_length - filled)
-        safe_addstr(stdscr, 8, 4, f"[{bar}]", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
-        
-        safe_addstr(stdscr, 10, 4, f"Quality: {quality}", curses.color_pair(2))
-        safe_addstr(stdscr, 11, 4, f"Last updated: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(3))
-        
-        safe_addstr(stdscr, 13, 4, "Press any key to stop...", curses.color_pair(1))
-        
-        stdscr.noutrefresh()
-        curses.doupdate()
-        
-        key = stdscr.getch()
-        if key != -1:
+        try:
+            stdscr.erase()
+            safe_addstr(stdscr, 1, 4, "📡 WIFI AR - Signal Monitor", curses.color_pair(5) | curses.A_BOLD)
+            
+            info = get_wifi_info()
+            dbm = info['dbm']
+            ssid = info['ssid']
+            quality = get_signal_quality(dbm)
+            
+            safe_addstr(stdscr, 4, 4, f"SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 6, 4, f"{dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
+            
+            bar_length = 45
+            filled = int((dbm + 100) / 50 * bar_length)
+            filled = max(0, min(bar_length, filled))
+            bar = "█" * filled + "░" * (bar_length - filled)
+            safe_addstr(stdscr, 8, 4, f"[{bar}]", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+            
+            safe_addstr(stdscr, 10, 4, f"Quality: {quality}", curses.color_pair(2))
+            safe_addstr(stdscr, 11, 4, f"Last updated: {datetime.now().strftime('%H:%M:%S')}", curses.color_pair(3))
+            
+            safe_addstr(stdscr, 13, 4, "Press any key to stop...", curses.color_pair(1))
+            
+            stdscr.noutrefresh()
+            curses.doupdate()
+            
+            key = stdscr.getch()
+            if key != -1:
+                running = False
+        except:
             running = False
     
     stdscr.timeout(timeout_ms)
@@ -872,45 +850,48 @@ def wifi_scanner(stdscr):
     devices = scan_wifi_devices()
     
     while True:
-        stdscr.erase()
-        safe_addstr(stdscr, 1, 4, f"📱 WIFI SCANNER - {len(devices)} Devices Found", curses.color_pair(5) | curses.A_BOLD)
-        
-        for idx, dev in enumerate(devices[:8]):
-            color = curses.color_pair(2) if idx == 0 else curses.color_pair(3)
-            safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {dev['ip'][:15]} | {dev['mac']} | {dev['name'][:10]}", color)
-        
-        safe_addstr(stdscr, 14, 4, "[R] Rescan  |  [D] Remove Device  |  [G] Go Back", curses.color_pair(3))
-        
-        stdscr.noutrefresh()
-        curses.doupdate()
-        
-        key = stdscr.getch()
-        if key == ord('r') or key == ord('R'):
-            devices = scan_wifi_devices()
-        elif key == ord('d') or key == ord('D'):
-            if devices:
-                curses.endwin()
-                os.system("clear")
-                print("Select device to remove (1-{})".format(len(devices)))
+        try:
+            stdscr.erase()
+            safe_addstr(stdscr, 1, 4, f"📱 WIFI SCANNER - {len(devices)} Devices Found", curses.color_pair(5) | curses.A_BOLD)
+            
+            for idx, dev in enumerate(devices[:8]):
+                color = curses.color_pair(2) if idx == 0 else curses.color_pair(3)
+                safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {dev['ip'][:15]} | {dev['mac']} | {dev['name'][:10]}", color)
+            
+            safe_addstr(stdscr, 14, 4, "[R] Rescan  |  [D] Remove Device  |  [G] Go Back", curses.color_pair(3))
+            
+            stdscr.noutrefresh()
+            curses.doupdate()
+            
+            key = stdscr.getch()
+            if key == ord('r') or key == ord('R'):
+                devices = scan_wifi_devices()
+            elif key == ord('d') or key == ord('D'):
+                if devices:
+                    curses.endwin()
+                    os.system("clear")
+                    print("Select device to remove (1-{})".format(len(devices)))
+                    try:
+                        choice = int(input("> ")) - 1
+                        if 0 <= choice < len(devices):
+                            removed = devices.pop(choice)
+                            print(f"✅ Removed: {removed['ip']}")
+                        input("\nPress Enter...")
+                    except:
+                        pass
+                    stdscr = curses.initscr()
+                    stdscr.timeout(timeout_ms)
+            elif key == ord('g') or key == ord('G') or key == ord('\n'):
+                break
+            elif key == curses.KEY_MOUSE:
                 try:
-                    choice = int(input("> ")) - 1
-                    if 0 <= choice < len(devices):
-                        removed = devices.pop(choice)
-                        print(f"✅ Removed: {removed['ip']}")
-                    input("\nPress Enter...")
-                except:
-                    pass
-                stdscr = curses.initscr()
-                stdscr.timeout(timeout_ms)
-        elif key == ord('g') or key == ord('G') or key == ord('\n'):
+                    _, mx, my, _, bstate = curses.getmouse()
+                    if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                        if my == 14:
+                            break
+                except: pass
+        except:
             break
-        elif key == curses.KEY_MOUSE:
-            try:
-                _, mx, my, _, bstate = curses.getmouse()
-                if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
-                    if my == 14:
-                        break
-            except: pass
     
     play_transition(stdscr)
 
@@ -920,61 +901,64 @@ def wifi_location(stdscr):
     stdscr.timeout(timeout_ms)
     
     while True:
-        stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "📍 WIFI LOCATION", curses.color_pair(5) | curses.A_BOLD)
-        
-        location = get_wifi_location()
-        info = get_wifi_info()
-        
-        safe_addstr(stdscr, 4, 4, f"📍 City: {location}", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 5, 4, f"📶 SSID: {info['ssid']}", curses.color_pair(3))
-        safe_addstr(stdscr, 6, 4, f"📊 Signal: {info['dbm']} dBm", curses.color_pair(4))
-        safe_addstr(stdscr, 7, 4, f"⭐ Quality: {get_signal_quality(info['dbm'])}", curses.color_pair(2))
-        
-        safe_addstr(stdscr, 9, 4, "[1] Get IP Location  |  [2] Network Info  |  [G] Go Back", curses.color_pair(3))
-        
-        stdscr.noutrefresh()
-        curses.doupdate()
-        
-        key = stdscr.getch()
-        if key == ord('1'):
-            curses.endwin()
-            os.system("clear")
-            print("\n📍 Getting IP Location...")
-            try:
-                result = subprocess.check_output("curl -s ipinfo.io", shell=True, timeout=10).decode()
-                data = json.loads(result)
-                print(f"\n🌐 IP: {data.get('ip', 'Unknown')}")
-                print(f"📍 City: {data.get('city', 'Unknown')}")
-                print(f"🏙️ Region: {data.get('region', 'Unknown')}")
-                print(f"🌍 Country: {data.get('country', 'Unknown')}")
-                print(f"📌 Location: {data.get('loc', 'Unknown')}")
-            except:
-                print("❌ Failed to get location")
-            input("\nPress Enter...")
-            stdscr = curses.initscr()
-            stdscr.timeout(timeout_ms)
-        elif key == ord('2'):
-            curses.endwin()
-            os.system("clear")
-            print("\n📶 Network Information:")
-            try:
-                result = subprocess.check_output("ip addr", shell=True, timeout=5).decode()
-                print(result[:500])
-            except:
-                print("❌ Failed to get network info")
-            input("\nPress Enter...")
-            stdscr = curses.initscr()
-            stdscr.timeout(timeout_ms)
-        elif key == ord('g') or key == ord('G') or key == ord('\n'):
+        try:
+            stdscr.erase()
+            safe_addstr(stdscr, 1, 4, "📍 WIFI LOCATION", curses.color_pair(5) | curses.A_BOLD)
+            
+            location = get_wifi_location()
+            info = get_wifi_info()
+            
+            safe_addstr(stdscr, 4, 4, f"📍 City: {location}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 5, 4, f"📶 SSID: {info['ssid']}", curses.color_pair(3))
+            safe_addstr(stdscr, 6, 4, f"📊 Signal: {info['dbm']} dBm", curses.color_pair(4))
+            safe_addstr(stdscr, 7, 4, f"⭐ Quality: {get_signal_quality(info['dbm'])}", curses.color_pair(2))
+            
+            safe_addstr(stdscr, 9, 4, "[1] Get IP Location  |  [2] Network Info  |  [G] Go Back", curses.color_pair(3))
+            
+            stdscr.noutrefresh()
+            curses.doupdate()
+            
+            key = stdscr.getch()
+            if key == ord('1'):
+                curses.endwin()
+                os.system("clear")
+                print("\n📍 Getting IP Location...")
+                try:
+                    result = subprocess.check_output("curl -s ipinfo.io", shell=True, timeout=10).decode()
+                    data = json.loads(result)
+                    print(f"\n🌐 IP: {data.get('ip', 'Unknown')}")
+                    print(f"📍 City: {data.get('city', 'Unknown')}")
+                    print(f"🏙️ Region: {data.get('region', 'Unknown')}")
+                    print(f"🌍 Country: {data.get('country', 'Unknown')}")
+                    print(f"📌 Location: {data.get('loc', 'Unknown')}")
+                except:
+                    print("❌ Failed to get location")
+                input("\nPress Enter...")
+                stdscr = curses.initscr()
+                stdscr.timeout(timeout_ms)
+            elif key == ord('2'):
+                curses.endwin()
+                os.system("clear")
+                print("\n📶 Network Information:")
+                try:
+                    result = subprocess.check_output("ip addr", shell=True, timeout=5).decode()
+                    print(result[:500])
+                except:
+                    print("❌ Failed to get network info")
+                input("\nPress Enter...")
+                stdscr = curses.initscr()
+                stdscr.timeout(timeout_ms)
+            elif key == ord('g') or key == ord('G') or key == ord('\n'):
+                break
+            elif key == curses.KEY_MOUSE:
+                try:
+                    _, mx, my, _, bstate = curses.getmouse()
+                    if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                        if my == 9:
+                            break
+                except: pass
+        except:
             break
-        elif key == curses.KEY_MOUSE:
-            try:
-                _, mx, my, _, bstate = curses.getmouse()
-                if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
-                    if my == 9:
-                        break
-            except: pass
     
     play_transition(stdscr)
 
@@ -991,25 +975,31 @@ def scan_nearby(stdscr):
     networks = scan_wifi_networks()
     
     while True:
-        stdscr.erase()
-        safe_addstr(stdscr, 1, 4, f"📡 Nearby Networks - {len(networks)} Found", curses.color_pair(5) | curses.A_BOLD)
-        
-        for idx, ssid in enumerate(networks[:8]):
-            safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {ssid}", curses.color_pair(2))
-        
-        safe_addstr(stdscr, 14, 4, "[R] Rescan  |  [G] Go Back", curses.color_pair(3))
-        
-        stdscr.noutrefresh()
-        curses.doupdate()
-        
-        key = stdscr.getch()
-        if key == ord('r') or key == ord('R'):
-            networks = scan_wifi_networks()
-        elif key == ord('g') or key == ord('G') or key == ord('\n'):
+        try:
+            stdscr.erase()
+            safe_addstr(stdscr, 1, 4, f"📡 Nearby Networks - {len(networks)} Found", curses.color_pair(5) | curses.A_BOLD)
+            
+            for idx, ssid in enumerate(networks[:8]):
+                safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {ssid}", curses.color_pair(2))
+            
+            safe_addstr(stdscr, 14, 4, "[R] Rescan  |  [G] Go Back", curses.color_pair(3))
+            
+            stdscr.noutrefresh()
+            curses.doupdate()
+            
+            key = stdscr.getch()
+            if key == ord('r') or key == ord('R'):
+                networks = scan_wifi_networks()
+            elif key == ord('g') or key == ord('G') or key == ord('\n'):
+                break
+        except:
             break
     
     play_transition(stdscr)
 
+# ==========================================
+# بەشەکانی تر (Antutu, Game, Hardware, Advanced, Main)
+# ==========================================
 def antutu_test_menu(stdscr):
     global timeout_ms, device_antutu_score
     play_transition(stdscr)
@@ -1081,9 +1071,6 @@ def antutu_test_menu(stdscr):
                         break
             except: pass
 
-# ==========================================
-# CHROME DINO GAME
-# ==========================================
 def run_fps_test_game(stdscr):
     global current_fps, current_hz, timeout_ms
     play_transition(stdscr)
@@ -1281,7 +1268,7 @@ def run_fps_test_game(stdscr):
 flash_active = False
 
 # ==========================================
-# HARDWARE PANEL
+# HARDWARE PANEL - چاککراوە
 # ==========================================
 def hardware_controls_menu(stdscr):
     global timeout_ms, flash_active
@@ -1292,93 +1279,95 @@ def hardware_controls_menu(stdscr):
     error_note = ""
     
     while True:
-        stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "🔧 HARDWARE & WIFI CONTROL", curses.color_pair(5) | curses.A_BOLD)
-        
-        flash_bar = "[ OFF ──────● ON ]" if flash_active else "[ OFF ●────── ON ]"
-        flash_color = curses.color_pair(4) if flash_active else curses.color_pair(1)
-        safe_addstr(stdscr, 3, 4, "LED Flash State:", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 4, 4, f"{flash_bar}", flash_color | curses.A_BOLD)
-        
-        safe_addstr(stdscr, 6, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 7, 4, "│          [ VIBRATE PHONE ]                  │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 8, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
-        
-        safe_addstr(stdscr, 10, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
-        safe_addstr(stdscr, 11, 4, "│          [ WIFI SETTINGS 📶 ]              │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 12, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
-        
-        info = get_wifi_info()
-        dbm = info['dbm']
-        ssid = info['ssid']
-        quality = get_signal_quality(dbm)
-        safe_addstr(stdscr, 14, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 15, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3))
-        safe_addstr(stdscr, 16, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
-        
-        bar_length = 30
-        filled = int((dbm + 100) / 50 * bar_length)
-        filled = max(0, min(bar_length, filled))
-        bar = "█" * filled + "░" * (bar_length - filled)
-        safe_addstr(stdscr, 17, 4, f"[{bar}]", curses.color_pair(3))
-        
-        if error_note:
-            safe_addstr(stdscr, 19, 4, f"⚠️ {error_note}", curses.color_pair(1) | curses.A_BOLD)
-        
-        if wifi_list:
-            safe_addstr(stdscr, 20, 4, "Nearby Networks:", curses.color_pair(5) | curses.A_BOLD)
-            for idx, ssid in enumerate(wifi_list[:6]):
-                safe_addstr(stdscr, 22 + idx, 6, f"{idx+1}. {ssid[:20]}", curses.color_pair(2))
-        
-        if connection_status:
-            status_color = curses.color_pair(4) if "Connected" in connection_status else curses.color_pair(1)
-            safe_addstr(stdscr, 28, 4, f"Status: {connection_status}", status_color | curses.A_BOLD)
-        
-        safe_addstr(stdscr, 30, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
-        safe_addstr(stdscr, 31, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 32, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
-        stdscr.noutrefresh()
-        curses.doupdate()
-        
-        key = stdscr.getch()
-        
-        if key == curses.KEY_MOUSE:
-            try:
-                _, mx, my, _, bstate = curses.getmouse()
-                if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
-                    if my == 4 and 4 <= mx <= 22:
-                        play_button_shrink(stdscr, 3, 4, "LED Flash State:", 2)
-                        flash_active = not flash_active
-                        toggle_flashlight(flash_active)
-                        vibrate_phone(100)
-                    elif 6 <= my <= 8 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 6, 4, "┌" + "─" * 50 + "┐", 4)
-                        vibrate_phone(1000)
-                        safe_addstr(stdscr, 9, 4, "📳 Vibrating...", curses.color_pair(4))
-                        stdscr.refresh()
-                        time.sleep(0.3)
-                    elif 10 <= my <= 12 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 10, 4, "┌" + "─" * 50 + "┐", 3)
-                        wifi_settings_menu(stdscr)
-                    elif wifi_list and 22 <= my < 22 + len(wifi_list):
-                        clicked_idx = my - 22
-                        if clicked_idx < len(wifi_list):
-                            target_ssid = wifi_list[clicked_idx]
-                            stdscr.timeout(-1)
-                            stdscr.erase()
-                            safe_addstr(stdscr, 2, 4, f"SSID Selected: {target_ssid}", curses.color_pair(4) | curses.A_BOLD)
-                            pwd = get_user_input(stdscr, 4, 4, "Enter Wi-Fi Password: ", mask=True)
-                            stdscr.erase()
-                            safe_addstr(stdscr, 5, 4, "Attempting to connect (requires root)...", curses.color_pair(3) | curses.A_BOLD)
+        try:
+            stdscr.erase()
+            safe_addstr(stdscr, 1, 4, "🔧 HARDWARE & WIFI CONTROL", curses.color_pair(5) | curses.A_BOLD)
+            
+            flash_bar = "[ OFF ──────● ON ]" if flash_active else "[ OFF ●────── ON ]"
+            flash_color = curses.color_pair(4) if flash_active else curses.color_pair(1)
+            safe_addstr(stdscr, 3, 4, "LED Flash State:", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 4, 4, f"{flash_bar}", flash_color | curses.A_BOLD)
+            
+            safe_addstr(stdscr, 6, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
+            safe_addstr(stdscr, 7, 4, "│          [ VIBRATE PHONE ]                  │", curses.color_pair(4) | curses.A_BOLD)
+            safe_addstr(stdscr, 8, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
+            
+            safe_addstr(stdscr, 10, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
+            safe_addstr(stdscr, 11, 4, "│          [ WIFI SETTINGS 📶 ]              │", curses.color_pair(3) | curses.A_BOLD)
+            safe_addstr(stdscr, 12, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
+            
+            info = get_wifi_info()
+            dbm = info['dbm']
+            ssid = info['ssid']
+            quality = get_signal_quality(dbm)
+            safe_addstr(stdscr, 14, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 15, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3))
+            safe_addstr(stdscr, 16, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+            
+            bar_length = 30
+            filled = int((dbm + 100) / 50 * bar_length)
+            filled = max(0, min(bar_length, filled))
+            bar = "█" * filled + "░" * (bar_length - filled)
+            safe_addstr(stdscr, 17, 4, f"[{bar}]", curses.color_pair(3))
+            
+            if error_note:
+                safe_addstr(stdscr, 19, 4, f"⚠️ {error_note}", curses.color_pair(1) | curses.A_BOLD)
+            
+            if wifi_list:
+                safe_addstr(stdscr, 20, 4, "Nearby Networks:", curses.color_pair(5) | curses.A_BOLD)
+                for idx, ssid in enumerate(wifi_list[:6]):
+                    safe_addstr(stdscr, 22 + idx, 6, f"{idx+1}. {ssid[:20]}", curses.color_pair(2))
+            
+            if connection_status:
+                status_color = curses.color_pair(4) if "Connected" in connection_status else curses.color_pair(1)
+                safe_addstr(stdscr, 28, 4, f"Status: {connection_status}", status_color | curses.A_BOLD)
+            
+            safe_addstr(stdscr, 30, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
+            safe_addstr(stdscr, 31, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
+            safe_addstr(stdscr, 32, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
+            stdscr.noutrefresh()
+            curses.doupdate()
+            
+            key = stdscr.getch()
+            
+            if key == curses.KEY_MOUSE:
+                try:
+                    _, mx, my, _, bstate = curses.getmouse()
+                    if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                        if my == 4 and 4 <= mx <= 22:
+                            flash_active = not flash_active
+                            toggle_flashlight(flash_active)
+                            vibrate_phone(100)
+                        elif 6 <= my <= 8 and 4 <= mx <= 54:
+                            play_button_shrink(stdscr, 6, 4, "┌" + "─" * 50 + "┐", 4)
+                            vibrate_phone(1000)
+                            safe_addstr(stdscr, 9, 4, "📳 Vibrating...", curses.color_pair(4))
                             stdscr.refresh()
-                            success = connect_to_wifi(target_ssid, pwd)
-                            connection_status = "Connected!" if success else "Connection failed (root needed)"
-                            stdscr.timeout(timeout_ms)
-                    elif 30 <= my <= 32 and 4 <= mx <= 24:
-                        play_button_shrink(stdscr, 30, 4, "┌" + "─" * 20 + "┐", 1)
-                        break
-            except: pass
-        elif key == ord('\n') or key == ord('q'):
+                            time.sleep(0.3)
+                        elif 10 <= my <= 12 and 4 <= mx <= 54:
+                            play_button_shrink(stdscr, 10, 4, "┌" + "─" * 50 + "┐", 3)
+                            wifi_settings_menu(stdscr)
+                        elif wifi_list and 22 <= my < 22 + len(wifi_list):
+                            clicked_idx = my - 22
+                            if clicked_idx < len(wifi_list):
+                                target_ssid = wifi_list[clicked_idx]
+                                stdscr.timeout(-1)
+                                stdscr.erase()
+                                safe_addstr(stdscr, 2, 4, f"SSID Selected: {target_ssid}", curses.color_pair(4) | curses.A_BOLD)
+                                pwd = get_user_input(stdscr, 4, 4, "Enter Wi-Fi Password: ", mask=True)
+                                stdscr.erase()
+                                safe_addstr(stdscr, 5, 4, "Attempting to connect (requires root)...", curses.color_pair(3) | curses.A_BOLD)
+                                stdscr.refresh()
+                                success = connect_to_wifi(target_ssid, pwd)
+                                connection_status = "Connected!" if success else "Connection failed (root needed)"
+                                stdscr.timeout(timeout_ms)
+                        elif 30 <= my <= 32 and 4 <= mx <= 24:
+                            play_button_shrink(stdscr, 30, 4, "┌" + "─" * 20 + "┐", 1)
+                            break
+                except: pass
+            elif key == ord('\n') or key == ord('q'):
+                break
+        except:
             break
     
     play_transition(stdscr)
@@ -1658,7 +1647,6 @@ def main(stdscr):
         safe_addstr(stdscr, 18, 35, "│  Advanced Settings ⚙️ │", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 19, 35, "└" + "─" * 27 + "┘", curses.color_pair(5))
         
-        # ===== UPDATE TOOL BUTTON =====
         safe_addstr(stdscr, 20, 4, "┌" + "─" * 27 + "┐", curses.color_pair(4))
         safe_addstr(stdscr, 21, 4, "│   Update Tool 🔄    │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 22, 4, "└" + "─" * 27 + "┘", curses.color_pair(4))
