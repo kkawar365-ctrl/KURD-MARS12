@@ -26,25 +26,51 @@ GMAIL_APP_PASS = ""
 SCORE_FILE = ".antutu_score"
 
 # ==========================================
-# GEMINI AI - ASYNC STREAMING CHAT
+# GEMINI AI - SECURE ASYNC STREAMING CHAT
 # ==========================================
-API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6IlLi8_rfZlFE01UiPpU1lRVC1Ey_zwocrXfoC9JlSHwQ")
-URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={API_KEY}&alt=sse"
+API_KEY = os.getenv("GEMINI_API_KEY")
+
+ENDPOINT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse"
 
 user_sessions = {}
+last_activity = {}
 user_timestamps = defaultdict(list)
+banned_users = {}
 
-MAX_HISTORY = 6
-MAX_TEXT_LENGTH = 1000
-RATE_LIMIT_COUNT = 5
-RATE_LIMIT_TIME = 10
+MAX_HISTORY = 4
+MAX_TEXT_LENGTH = 500
+RATE_LIMIT_COUNT = 3
+RATE_LIMIT_TIME = 5
+BAN_DURATION = 900
+
+connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300, keepalive_timeout=60)
+http_session = None
 
 
-def is_rate_limited(user_id: str) -> bool:
+async def get_http_session():
+    global http_session
+    if http_session is None or http_session.closed:
+        http_session = aiohttp.ClientSession(connector=connector)
+    return http_session
+
+
+def is_banned(user_id: str) -> bool:
+    if user_id in banned_users:
+        if time.time() < banned_users[user_id]:
+            return True
+        else:
+            del banned_users[user_id]
+    return False
+
+
+def enforce_rate_limit(user_id: str) -> bool:
     now = time.time()
     user_timestamps[user_id] = [t for t in user_timestamps[user_id] if now - t < RATE_LIMIT_TIME]
+    
     if len(user_timestamps[user_id]) >= RATE_LIMIT_COUNT:
+        banned_users[user_id] = now + BAN_DURATION
         return True
+    
     user_timestamps[user_id].append(now)
     return False
 
@@ -52,69 +78,89 @@ def is_rate_limited(user_id: str) -> bool:
 def sanitize_input(text: str) -> str:
     if not text:
         return ""
-    text = text.strip()
-    return text[:MAX_TEXT_LENGTH]
+    
+    clean_text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    clean_text = clean_text.strip()[:MAX_TEXT_LENGTH]
+    
+    return clean_text
+
+
+def cleanup_inactive_memory():
+    now = time.time()
+    expired = [uid for uid, last_t in last_activity.items() if now - last_t > 1800]
+    for uid in expired:
+        user_sessions.pop(uid, None)
+        last_activity.pop(uid, None)
 
 
 async def get_ai_stream_response(user_id: str, user_message: str):
-    if is_rate_limited(user_id):
-        yield "Security Alert: Rate limit exceeded. Please wait a few seconds."
+    cleanup_inactive_memory()
+
+    if is_banned(user_id):
+        yield "Security Block: Account restricted due to malicious pattern detection."
+        return
+
+    if enforce_rate_limit(user_id):
+        yield "Security Alert: Rate limit exceeded. Temporary access restriction applied."
         return
 
     clean_message = sanitize_input(user_message)
     if not clean_message:
-        yield "Error: Empty message received."
+        yield "Security Error: Invalid input format."
         return
 
+    last_activity[user_id] = time.time()
     if user_id not in user_sessions:
         user_sessions[user_id] = []
 
     history = user_sessions[user_id]
-
     if len(history) > MAX_HISTORY:
         history = history[-MAX_HISTORY:]
 
     history.append({"role": "user", "parts": [{"text": clean_message}]})
 
     payload = {"contents": history}
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": API_KEY
+    }
 
-    timeout = aiohttp.ClientTimeout(total=10)
+    timeout = aiohttp.ClientTimeout(total=8)
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(URL, json=payload, headers=headers) as response:
-                if response.status != 200:
-                    history.pop()
-                    yield f"API Error: Server returned code {response.status}"
-                    return
+        session = await get_http_session()
+        async with session.post(ENDPOINT_URL, json=payload, headers=headers, timeout=timeout) as response:
+            if response.status != 200:
+                history.pop()
+                yield f"API Protection Error: Status code {response.status}"
+                return
 
-                full_reply = ""
-                async for line in response.content:
-                    if line:
-                        decoded = line.decode('utf-8').strip()
-                        if decoded.startswith("data: "):
-                            try:
-                                data = json.loads(decoded[6:])
-                                chunk = data["candidates"][0]["content"]["parts"][0]["text"]
-                                full_reply += chunk
-                                yield chunk
-                            except (KeyError, json.JSONDecodeError):
-                                pass
+            full_reply = ""
+            async for line in response.content:
+                if line:
+                    decoded = line.decode('utf-8', errors='ignore').strip()
+                    if decoded.startswith("data: "):
+                        try:
+                            data = json.loads(decoded[6:])
+                            chunk = data["candidates"][0]["content"]["parts"][0]["text"]
+                            full_reply += chunk
+                            yield chunk
+                        except (KeyError, json.JSONDecodeError):
+                            pass
 
-                if full_reply:
-                    history.append({"role": "model", "parts": [{"text": full_reply}]})
-                else:
-                    history.pop()
+            if full_reply:
+                history.append({"role": "model", "parts": [{"text": full_reply}]})
+            else:
+                history.pop()
 
     except asyncio.TimeoutError:
         if history and history[-1]["role"] == "user":
             history.pop()
-        yield "Security Error: Connection timed out."
+        yield "Security Error: Gateway timeout."
     except Exception as e:
         if history and history[-1]["role"] == "user":
             history.pop()
-        yield f"System Error: {str(e)}"
+        yield "System Error: Process terminated safely."
 
 
 def gemini_chat(stdscr):
@@ -150,10 +196,9 @@ def gemini_chat(stdscr):
 
     curses.curs_set(0)
     
-    global API_KEY, URL
+    global API_KEY
     if api_key_input.strip():
         API_KEY = api_key_input.strip()
-        URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={API_KEY}&alt=sse"
 
     history = []
     chat_active = True
@@ -211,7 +256,6 @@ def gemini_chat(stdscr):
             stdscr.refresh()
 
             try:
-                # Run async function in sync context
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
@@ -672,7 +716,8 @@ def termux_setup(stdscr):
         "pkg install zip -y", "pkg install unzip -y", "pkg install tar -y",
         "pkg install ncurses-utils -y", "pkg install termux-exec -y",
         "pip install --upgrade pip", "pip install requests",
-        "pip install beautifulsoup4", "pip install colorama", "pip install tqdm"
+        "pip install beautifulsoup4", "pip install colorama", "pip install tqdm",
+        "pip install aiohttp"
     ]
     
     success_count = 0
