@@ -11,6 +11,7 @@ import threading
 import socket
 import re
 import random
+import requests
 from datetime import datetime
 from email.mime.text import MIMEText
 
@@ -21,6 +22,201 @@ GMAIL_USER = ""
 GMAIL_APP_PASS = ""
 SCORE_FILE = ".antutu_score"
 
+# ==========================================
+# GEMINI API - STREAMING CHAT
+# ==========================================
+def gemini_chat(stdscr):
+    global timeout_ms
+    play_transition(stdscr)
+    stdscr.timeout(-1)
+    
+    # وەرگرتنی API Key
+    stdscr.erase()
+    height, width = stdscr.getmaxyx()
+    safe_addstr(stdscr, height//2 - 2, width//2 - 20, "🔑 Enter Gemini API Key:", curses.color_pair(4) | curses.A_BOLD)
+    stdscr.refresh()
+    
+    curses.curs_set(1)
+    api_key_input = ""
+    start_x = width//2 - 20 + 23
+    y = height//2
+    
+    while True:
+        ch = stdscr.getch()
+        if ch == 10 or ch == 13:
+            break
+        elif ch in [8, 127, curses.KEY_BACKSPACE]:
+            if len(api_key_input) > 0:
+                api_key_input = api_key_input[:-1]
+                stdscr.move(y, start_x + len(api_key_input))
+                stdscr.addch(" ")
+                stdscr.move(y, start_x + len(api_key_input))
+        elif 32 <= ch <= 126:
+            if len(api_key_input) < 50:
+                api_key_input += chr(ch)
+                stdscr.addch(y, start_x + len(api_key_input) - 1, "*")
+        stdscr.refresh()
+    
+    curses.curs_set(0)
+    api_key = api_key_input.strip()
+    
+    if not api_key:
+        safe_addstr(stdscr, height//2 + 2, width//2 - 15, "❌ No API Key provided!", curses.color_pair(1) | curses.A_BOLD)
+        stdscr.refresh()
+        time.sleep(1.5)
+        play_transition(stdscr)
+        return
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={api_key}&alt=sse"
+    
+    history = []
+    chat_active = True
+    input_buffer = ""
+    
+    while chat_active:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+        
+        safe_addstr(stdscr, 1, width//2 - 15, "🤖 GEMINI FAST STREAM CHAT", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 2, width//2 - 20, "Type your message (type 'exit' to quit)", curses.color_pair(3))
+        safe_hline(stdscr, 3, 0, "═", width, curses.color_pair(4))
+        
+        # نمایش مێژووی چات (تەنها ١٠ دوایین پەیام)
+        start_y = 5
+        max_lines = height - 10
+        display_history = history[-10:] if len(history) > 10 else history
+        
+        for idx, msg in enumerate(display_history):
+            role = "You" if msg["role"] == "user" else "Gemini"
+            color = curses.color_pair(2) if msg["role"] == "user" else curses.color_pair(4)
+            text = msg["parts"][0]["text"][:width-10]
+            if start_y + idx < height - 5:
+                safe_addstr(stdscr, start_y + idx, 2, f"{role}: {text}", color | curses.A_BOLD)
+        
+        # هێڵی نووسین
+        input_y = height - 4
+        safe_addstr(stdscr, input_y, 2, "> ", curses.color_pair(4) | curses.A_BOLD)
+        
+        curses.curs_set(1)
+        cmd_input = ""
+        start_x = 4
+        
+        while True:
+            ch = stdscr.getch()
+            if ch == 10 or ch == 13:
+                break
+            elif ch in [8, 127, curses.KEY_BACKSPACE]:
+                if len(cmd_input) > 0:
+                    cmd_input = cmd_input[:-1]
+                    stdscr.move(input_y, start_x + len(cmd_input))
+                    stdscr.addch(" ")
+                    stdscr.move(input_y, start_x + len(cmd_input))
+            elif 32 <= ch <= 126:
+                if len(cmd_input) < 80:
+                    cmd_input += chr(ch)
+                    stdscr.addch(input_y, start_x + len(cmd_input) - 1, ch)
+            stdscr.refresh()
+        
+        curses.curs_set(0)
+        
+        if cmd_input.lower() in ["exit", "quit", "q"]:
+            break
+        
+        if cmd_input.strip():
+            # نیشاندانی بارکردن
+            stdscr.erase()
+            safe_addstr(stdscr, height//2, width//2 - 15, "⏳ Thinking (Streaming)...", curses.color_pair(3) | curses.A_BOLD)
+            stdscr.refresh()
+            
+            try:
+                if len(history) > 20:
+                    history = history[-20:]
+                
+                history.append({"role": "user", "parts": [{"text": cmd_input}]})
+                
+                payload = {"contents": history}
+                headers = {"Content-Type": "application/json"}
+                
+                response = requests.post(url, json=payload, headers=headers, stream=True, timeout=15)
+                
+                if response.status_code != 200:
+                    stdscr.erase()
+                    safe_addstr(stdscr, height//2, width//2 - 15, f"❌ API Error: {response.status_code}", curses.color_pair(1) | curses.A_BOLD)
+                    stdscr.refresh()
+                    time.sleep(1.5)
+                    history.pop()
+                    continue
+                
+                # نیشاندانی وەڵام بە شێوەی Streaming
+                stdscr.erase()
+                safe_addstr(stdscr, 1, 2, "🤖 Gemini:", curses.color_pair(4) | curses.A_BOLD)
+                safe_hline(stdscr, 2, 0, "═", width, curses.color_pair(5))
+                
+                full_reply = ""
+                line_y = 4
+                current_line = ""
+                
+                for line in response.iter_lines():
+                    if line:
+                        decoded_line = line.decode('utf-8')
+                        if decoded_line.startswith("data: "):
+                            data_str = decoded_line[6:]
+                            try:
+                                data_json = json.loads(data_str)
+                                chunk = data_json["candidates"][0]["content"]["parts"][0]["text"]
+                                full_reply += chunk
+                                current_line += chunk
+                                
+                                # نیشاندانی چەند هێڵ یەکەم
+                                if len(current_line) > 50:
+                                    current_line = "..."
+                                
+                                safe_addstr(stdscr, line_y, 2, current_line[:width-4], curses.color_pair(3) | curses.A_BOLD)
+                                stdscr.refresh()
+                                
+                            except (KeyError, json.JSONDecodeError):
+                                pass
+                
+                # نیشاندانی وەڵامی تەواو
+                if full_reply:
+                    stdscr.erase()
+                    safe_addstr(stdscr, 1, 2, "🤖 Gemini:", curses.color_pair(4) | curses.A_BOLD)
+                    safe_hline(stdscr, 2, 0, "═", width, curses.color_pair(5))
+                    
+                    # دابەشکردنی وەڵام بەسەر چەند هێڵدا
+                    reply_lines = full_reply.split('\n')
+                    for idx, line in enumerate(reply_lines[:15]):
+                        if idx < height - 8:
+                            safe_addstr(stdscr, 4 + idx, 2, line[:width-4], curses.color_pair(3))
+                    
+                    if len(reply_lines) > 15:
+                        safe_addstr(stdscr, 20, 2, f"... and {len(reply_lines)-15} more lines", curses.color_pair(2))
+                    
+                    safe_addstr(stdscr, height - 3, 2, "[ Press any key to continue ]", curses.color_pair(3))
+                    stdscr.refresh()
+                    stdscr.getch()
+                    
+                    history.append({"role": "model", "parts": [{"text": full_reply}]})
+                else:
+                    history.pop()
+                    stdscr.erase()
+                    safe_addstr(stdscr, height//2, width//2 - 15, "❌ No response received!", curses.color_pair(1) | curses.A_BOLD)
+                    stdscr.refresh()
+                    time.sleep(1.5)
+                
+            except requests.exceptions.Timeout:
+                history.append({"role": "model", "parts": [{"text": "⏰ Connection timeout. Please try again."}]})
+            except requests.exceptions.RequestException as e:
+                history.append({"role": "model", "parts": [{"text": f"📡 Network Error: {str(e)[:50]}"}]})
+            except Exception as e:
+                history.append({"role": "model", "parts": [{"text": f"⚠️ Error: {str(e)[:50]}"}]})
+    
+    stdscr.timeout(timeout_ms)
+    play_transition(stdscr)
+
+# ==========================================
+# EMAIL FUNCTIONS
+# ==========================================
 def save_antutu_score(score):
     try:
         with open(SCORE_FILE, "w") as f:
@@ -52,6 +248,9 @@ def send_email_notification(subject, body_text):
     except Exception as e:
         return False, f"Failed to send: {str(e)}"
 
+# ==========================================
+# HARDWARE FUNCTIONS
+# ==========================================
 def toggle_flashlight(state):
     try:
         if state:
@@ -86,6 +285,9 @@ def connect_to_wifi(ssid, password):
         return res.returncode == 0
     except: return False
 
+# ==========================================
+# HARDWARE INFO & BENCHMARK
+# ==========================================
 def get_hardware_info():
     soc_model = ""
     try:
@@ -150,6 +352,9 @@ def calculate_antutu_v11_score(bench_count):
 
 device_antutu_score = load_antutu_score()
 
+# ==========================================
+# GRAPHICS SETTINGS
+# ==========================================
 def check_processor_power():
     cores = multiprocessing.cpu_count()
     return 120 if cores >= 8 else 60
@@ -165,6 +370,9 @@ def update_timeout():
     global timeout_ms, current_fps
     timeout_ms = max(1, int(1000 / current_fps))
 
+# ==========================================
+# CURSES HELPERS
+# ==========================================
 def safe_addstr(stdscr, y, x, text, attr=0):
     try:
         height, width = stdscr.getmaxyx()
@@ -260,7 +468,7 @@ def get_user_input(stdscr, y, x, prompt, mask=False):
     return input_str
 
 # ==========================================
-# UPDATE TOOL - Progress Bar
+# UPDATE TOOL
 # ==========================================
 def update_tool(stdscr):
     stdscr.erase()
@@ -656,7 +864,7 @@ def fastboot_command_mode(stdscr):
     play_transition(stdscr)
 
 # ==========================================
-# WIFI FUNCTIONS - چاککراوە (بەبێ dumpsys)
+# WIFI FUNCTIONS
 # ==========================================
 def get_wifi_info():
     info = {'ssid': 'Unknown', 'dbm': -70, 'quality': 'Poor'}
@@ -713,9 +921,6 @@ def get_wifi_location():
     except: pass
     return "Unknown"
 
-# ==========================================
-# WIFI SETTINGS MENU - چاککراوە
-# ==========================================
 def wifi_settings_menu(stdscr):
     global timeout_ms
     play_transition(stdscr)
@@ -997,9 +1202,6 @@ def scan_nearby(stdscr):
     
     play_transition(stdscr)
 
-# ==========================================
-# بەشەکانی تر (Antutu, Game, Hardware, Advanced, Main)
-# ==========================================
 def antutu_test_menu(stdscr):
     global timeout_ms, device_antutu_score
     play_transition(stdscr)
@@ -1267,9 +1469,6 @@ def run_fps_test_game(stdscr):
 
 flash_active = False
 
-# ==========================================
-# HARDWARE PANEL - چاککراوە
-# ==========================================
 def hardware_controls_menu(stdscr):
     global timeout_ms, flash_active
     play_transition(stdscr)
@@ -1372,9 +1571,6 @@ def hardware_controls_menu(stdscr):
     
     play_transition(stdscr)
 
-# ==========================================
-# ADVANCED SETTINGS
-# ==========================================
 def settings_menu(stdscr):
     global current_hz, current_fps, timeout_ms, selected_hz, selected_fps
     play_transition(stdscr)
@@ -1648,14 +1844,18 @@ def main(stdscr):
         safe_addstr(stdscr, 19, 35, "└" + "─" * 27 + "┘", curses.color_pair(5))
         
         safe_addstr(stdscr, 20, 4, "┌" + "─" * 27 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 21, 4, "│   Update Tool 🔄    │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 21, 4, "│   Gemini Chat 🤖    │", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 22, 4, "└" + "─" * 27 + "┘", curses.color_pair(4))
+        
+        safe_addstr(stdscr, 23, 4, "┌" + "─" * 27 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 24, 4, "│   Update Tool 🔄    │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 25, 4, "└" + "─" * 27 + "┘", curses.color_pair(4))
         
         width = 80
         exit_x = (width - 22) // 2
-        safe_addstr(stdscr, 23, exit_x, "┌" + "─" * 22 + "┐", curses.color_pair(1))
-        safe_addstr(stdscr, 24, exit_x, "│       [ Exit ]        │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 25, exit_x, "└" + "─" * 22 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 26, exit_x, "┌" + "─" * 22 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 27, exit_x, "│       [ Exit ]        │", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, 28, exit_x, "└" + "─" * 22 + "┘", curses.color_pair(1))
 
         stdscr.noutrefresh()
         curses.doupdate()
@@ -1685,8 +1885,11 @@ def main(stdscr):
                         settings_menu(stdscr)
                     elif 20 <= my <= 22 and 4 <= mx <= 31:
                         play_button_shrink(stdscr, 20, 4, "┌" + "─" * 27 + "┐", 4)
+                        gemini_chat(stdscr)
+                    elif 23 <= my <= 25 and 4 <= mx <= 31:
+                        play_button_shrink(stdscr, 23, 4, "┌" + "─" * 27 + "┐", 4)
                         update_tool(stdscr)
-                    elif 23 <= my <= 25 and exit_x <= mx <= exit_x + 22:
+                    elif 26 <= my <= 28 and exit_x <= mx <= exit_x + 22:
                         break
             except: pass
 
