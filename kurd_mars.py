@@ -30,7 +30,13 @@ SCORE_FILE = ".antutu_score"
 # ==========================================
 API_KEY = os.getenv("GEMINI_API_KEY")
 
-ENDPOINT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse"
+if not API_KEY:
+    try:
+        API_KEY = input("Enter Gemini API Key: ").strip()
+    except Exception:
+        API_KEY = ""
+
+ENDPOINT_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={API_KEY}&alt=sse"
 
 user_sessions = {}
 last_activity = {}
@@ -78,11 +84,8 @@ def enforce_rate_limit(user_id: str) -> bool:
 def sanitize_input(text: str) -> str:
     if not text:
         return ""
-    
     clean_text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-    clean_text = clean_text.strip()[:MAX_TEXT_LENGTH]
-    
-    return clean_text
+    return clean_text.strip()[:MAX_TEXT_LENGTH]
 
 
 def cleanup_inactive_memory():
@@ -96,12 +99,16 @@ def cleanup_inactive_memory():
 async def get_ai_stream_response(user_id: str, user_message: str):
     cleanup_inactive_memory()
 
+    if not API_KEY:
+        yield "Security Error: Missing API Key."
+        return
+
     if is_banned(user_id):
         yield "Security Block: Account restricted due to malicious pattern detection."
         return
 
     if enforce_rate_limit(user_id):
-        yield "Security Alert: Rate limit exceeded. Temporary access restriction applied."
+        yield "Security Alert: Rate limit exceeded."
         return
 
     clean_message = sanitize_input(user_message)
@@ -120,10 +127,7 @@ async def get_ai_stream_response(user_id: str, user_message: str):
     history.append({"role": "user", "parts": [{"text": clean_message}]})
 
     payload = {"contents": history}
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY
-    }
+    headers = {"Content-Type": "application/json"}
 
     timeout = aiohttp.ClientTimeout(total=8)
 
@@ -132,7 +136,7 @@ async def get_ai_stream_response(user_id: str, user_message: str):
         async with session.post(ENDPOINT_URL, json=payload, headers=headers, timeout=timeout) as response:
             if response.status != 200:
                 history.pop()
-                yield f"API Protection Error: Status code {response.status}"
+                yield f"API Error: Server returned code {response.status}"
                 return
 
             full_reply = ""
@@ -165,40 +169,50 @@ async def get_ai_stream_response(user_id: str, user_message: str):
 
 def gemini_chat(stdscr):
     global timeout_ms
+    global API_KEY, ENDPOINT_URL
+    
     play_transition(stdscr)
     stdscr.timeout(-1)
 
-    stdscr.erase()
-    height, width = stdscr.getmaxyx()
-    safe_addstr(stdscr, height//2 - 2, width//2 - 20, "Enter Gemini API Key (press Enter for default):", curses.color_pair(4) | curses.A_BOLD)
-    stdscr.refresh()
-
-    curses.curs_set(1)
-    api_key_input = ""
-    start_x = width//2 - 20 + 40
-    y = height//2
-
-    while True:
-        ch = stdscr.getch()
-        if ch == 10 or ch == 13:
-            break
-        elif ch in [8, 127, curses.KEY_BACKSPACE]:
-            if len(api_key_input) > 0:
-                api_key_input = api_key_input[:-1]
-                stdscr.move(y, start_x + len(api_key_input))
-                stdscr.addch(" ")
-                stdscr.move(y, start_x + len(api_key_input))
-        elif 32 <= ch <= 126:
-            if len(api_key_input) < 60:
-                api_key_input += chr(ch)
-                stdscr.addch(y, start_x + len(api_key_input) - 1, "*")
+    # Check if API Key is set
+    if not API_KEY:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+        safe_addstr(stdscr, height//2 - 2, width//2 - 20, "Enter Gemini API Key:", curses.color_pair(4) | curses.A_BOLD)
         stdscr.refresh()
 
-    curses.curs_set(0)
-    
-    global API_KEY
-    if api_key_input.strip():
-        API_KEY = api_key_input.strip()
+        curses.curs_set(1)
+        api_key_input = ""
+        start_x = width//2 - 20 + 23
+        y = height//2
+
+        while True:
+            ch = stdscr.getch()
+            if ch == 10 or ch == 13:
+                break
+            elif ch in [8, 127, curses.KEY_BACKSPACE]:
+                if len(api_key_input) > 0:
+                    api_key_input = api_key_input[:-1]
+                    stdscr.move(y, start_x + len(api_key_input))
+                    stdscr.addch(" ")
+                    stdscr.move(y, start_x + len(api_key_input))
+            elif 32 <= ch <= 126:
+                if len(api_key_input) < 60:
+                    api_key_input += chr(ch)
+                    stdscr.addch(y, start_x + len(api_key_input) - 1, "*")
+            stdscr.refresh()
+
+        curses.curs_set(0)
+        
+        if api_key_input.strip():
+            API_KEY = api_key_input.strip()
+            ENDPOINT_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={API_KEY}&alt=sse"
+        else:
+            safe_addstr(stdscr, height//2 + 2, width//2 - 15, "No API Key provided!", curses.color_pair(1) | curses.A_BOLD)
+            stdscr.refresh()
+            time.sleep(1.5)
+            play_transition(stdscr)
+            return
 
     history = []
     chat_active = True
@@ -266,14 +280,12 @@ def gemini_chat(stdscr):
                 full_reply = ""
                 line_y = 4
                 current_line = ""
-                chunk_count = 0
                 
                 async def stream_response():
-                    nonlocal full_reply, current_line, chunk_count
+                    nonlocal full_reply, current_line
                     async for chunk in get_ai_stream_response(user_id, cmd_input):
                         full_reply += chunk
                         current_line += chunk
-                        chunk_count += 1
                         
                         if len(current_line) > 50:
                             current_line = "..."
