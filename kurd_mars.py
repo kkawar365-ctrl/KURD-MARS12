@@ -1,5 +1,4 @@
 
-
 import os
 import sys
 import time
@@ -12,327 +11,73 @@ import threading
 import socket
 import re
 import random
-import asyncio
-import aiohttp
 from datetime import datetime
 from email.mime.text import MIMEText
-from collections import defaultdict
 
 # ==========================================
-# GMAIL CONFIGURATION
+# SECURITY SYSTEM - Anti-Hacking Protection
+# ==========================================
+SECURITY_FILE = ".security_lock"
+FAILED_ATTEMPTS_FILE = ".failed_attempts"
+MAX_ATTEMPTS = 3
+BAN_DURATION = 3600  # 1 hour ban
+
+def load_failed_attempts():
+    if os.path.exists(FAILED_ATTEMPTS_FILE):
+        try:
+            with open(FAILED_ATTEMPTS_FILE, "r") as f:
+                return json.loads(f.read())
+        except: return {'count': 0, 'timestamp': 0}
+    return {'count': 0, 'timestamp': 0}
+
+def save_failed_attempts(data):
+    try:
+        with open(FAILED_ATTEMPTS_FILE, "w") as f:
+            f.write(json.dumps(data))
+    except: pass
+
+def is_banned():
+    data = load_failed_attempts()
+    now = time.time()
+    if data['count'] >= MAX_ATTEMPTS:
+        if now - data['timestamp'] < BAN_DURATION:
+            return True, f"⚠️ BANNED! Too many failed attempts. Try again in {int((BAN_DURATION - (now - data['timestamp'])) / 60)} minutes."
+        else:
+            data['count'] = 0
+            save_failed_attempts(data)
+    return False, ""
+
+def record_failed_attempt():
+    data = load_failed_attempts()
+    now = time.time()
+    if now - data.get('timestamp', 0) > BAN_DURATION:
+        data['count'] = 0
+    data['count'] += 1
+    data['timestamp'] = now
+    save_failed_attempts(data)
+    return data['count']
+
+def security_check(stdscr):
+    """Check if user is banned before allowing access"""
+    banned, msg = is_banned()
+    if banned:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        safe_addstr(stdscr, h//2 - 2, w//2 - 20, "🔒 SECURITY BLOCKED", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, h//2, w//2 - 20, msg[:w-10], curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, h//2 + 2, w//2 - 20, "Contact administrator to unlock.", curses.color_pair(3))
+        stdscr.refresh()
+        time.sleep(5)
+        return False
+    return True
+
+# ==========================================
+# EMAIL CONFIGURATION - USER MUST FILL
 # ==========================================
 GMAIL_USER = ""
 GMAIL_APP_PASS = ""
 SCORE_FILE = ".antutu_score"
 
-# ==========================================
-# GEMINI AI - SECURE ASYNC STREAMING CHAT
-# ==========================================
-API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not API_KEY:
-    try:
-        API_KEY = input("Enter Gemini API Key: ").strip()
-    except Exception:
-        API_KEY = ""
-
-ENDPOINT_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={API_KEY}&alt=sse"
-
-user_sessions = {}
-last_activity = {}
-user_timestamps = defaultdict(list)
-banned_users = {}
-
-MAX_HISTORY = 4
-MAX_TEXT_LENGTH = 500
-RATE_LIMIT_COUNT = 3
-RATE_LIMIT_TIME = 5
-BAN_DURATION = 900
-
-connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300, keepalive_timeout=60)
-http_session = None
-
-
-async def get_http_session():
-    global http_session
-    if http_session is None or http_session.closed:
-        http_session = aiohttp.ClientSession(connector=connector)
-    return http_session
-
-
-def is_banned(user_id: str) -> bool:
-    if user_id in banned_users:
-        if time.time() < banned_users[user_id]:
-            return True
-        else:
-            del banned_users[user_id]
-    return False
-
-
-def enforce_rate_limit(user_id: str) -> bool:
-    now = time.time()
-    user_timestamps[user_id] = [t for t in user_timestamps[user_id] if now - t < RATE_LIMIT_TIME]
-    
-    if len(user_timestamps[user_id]) >= RATE_LIMIT_COUNT:
-        banned_users[user_id] = now + BAN_DURATION
-        return True
-    
-    user_timestamps[user_id].append(now)
-    return False
-
-
-def sanitize_input(text: str) -> str:
-    if not text:
-        return ""
-    clean_text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-    return clean_text.strip()[:MAX_TEXT_LENGTH]
-
-
-def cleanup_inactive_memory():
-    now = time.time()
-    expired = [uid for uid, last_t in last_activity.items() if now - last_t > 1800]
-    for uid in expired:
-        user_sessions.pop(uid, None)
-        last_activity.pop(uid, None)
-
-
-async def get_ai_stream_response(user_id: str, user_message: str):
-    cleanup_inactive_memory()
-
-    if not API_KEY:
-        yield "Security Error: Missing API Key."
-        return
-
-    if is_banned(user_id):
-        yield "Security Block: Account restricted due to malicious pattern detection."
-        return
-
-    if enforce_rate_limit(user_id):
-        yield "Security Alert: Rate limit exceeded."
-        return
-
-    clean_message = sanitize_input(user_message)
-    if not clean_message:
-        yield "Security Error: Invalid input format."
-        return
-
-    last_activity[user_id] = time.time()
-    if user_id not in user_sessions:
-        user_sessions[user_id] = []
-
-    history = user_sessions[user_id]
-    if len(history) > MAX_HISTORY:
-        history = history[-MAX_HISTORY:]
-
-    history.append({"role": "user", "parts": [{"text": clean_message}]})
-
-    payload = {"contents": history}
-    headers = {"Content-Type": "application/json"}
-
-    timeout = aiohttp.ClientTimeout(total=8)
-
-    try:
-        session = await get_http_session()
-        async with session.post(ENDPOINT_URL, json=payload, headers=headers, timeout=timeout) as response:
-            if response.status != 200:
-                history.pop()
-                yield f"API Error: Server returned code {response.status}"
-                return
-
-            full_reply = ""
-            async for line in response.content:
-                if line:
-                    decoded = line.decode('utf-8', errors='ignore').strip()
-                    if decoded.startswith("data: "):
-                        try:
-                            data = json.loads(decoded[6:])
-                            chunk = data["candidates"][0]["content"]["parts"][0]["text"]
-                            full_reply += chunk
-                            yield chunk
-                        except (KeyError, json.JSONDecodeError):
-                            pass
-
-            if full_reply:
-                history.append({"role": "model", "parts": [{"text": full_reply}]})
-            else:
-                history.pop()
-
-    except asyncio.TimeoutError:
-        if history and history[-1]["role"] == "user":
-            history.pop()
-        yield "Security Error: Gateway timeout."
-    except Exception as e:
-        if history and history[-1]["role"] == "user":
-            history.pop()
-        yield "System Error: Process terminated safely."
-
-
-def gemini_chat(stdscr):
-    global timeout_ms
-    global API_KEY, ENDPOINT_URL
-    
-    play_transition(stdscr)
-    stdscr.timeout(-1)
-
-    # Check if API Key is set
-    if not API_KEY:
-        stdscr.erase()
-        height, width = stdscr.getmaxyx()
-        safe_addstr(stdscr, height//2 - 2, width//2 - 20, "Enter Gemini API Key:", curses.color_pair(4) | curses.A_BOLD)
-        stdscr.refresh()
-
-        curses.curs_set(1)
-        api_key_input = ""
-        start_x = width//2 - 20 + 23
-        y = height//2
-
-        while True:
-            ch = stdscr.getch()
-            if ch == 10 or ch == 13:
-                break
-            elif ch in [8, 127, curses.KEY_BACKSPACE]:
-                if len(api_key_input) > 0:
-                    api_key_input = api_key_input[:-1]
-                    stdscr.move(y, start_x + len(api_key_input))
-                    stdscr.addch(" ")
-                    stdscr.move(y, start_x + len(api_key_input))
-            elif 32 <= ch <= 126:
-                if len(api_key_input) < 60:
-                    api_key_input += chr(ch)
-                    stdscr.addch(y, start_x + len(api_key_input) - 1, "*")
-            stdscr.refresh()
-
-        curses.curs_set(0)
-        
-        if api_key_input.strip():
-            API_KEY = api_key_input.strip()
-            ENDPOINT_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?key={API_KEY}&alt=sse"
-        else:
-            safe_addstr(stdscr, height//2 + 2, width//2 - 15, "No API Key provided!", curses.color_pair(1) | curses.A_BOLD)
-            stdscr.refresh()
-            time.sleep(1.5)
-            play_transition(stdscr)
-            return
-
-    history = []
-    chat_active = True
-    user_id = "termux_user"
-
-    while chat_active:
-        stdscr.erase()
-        height, width = stdscr.getmaxyx()
-
-        safe_addstr(stdscr, 1, width//2 - 15, "GEMINI ASYNC STREAM CHAT", curses.color_pair(5) | curses.A_BOLD)
-        safe_addstr(stdscr, 2, width//2 - 20, "Type message (type 'exit' to quit)", curses.color_pair(3))
-        safe_hline(stdscr, 3, 0, "=", width, curses.color_pair(4))
-
-        start_y = 5
-        display_history = history[-10:] if len(history) > 10 else history
-
-        for idx, msg in enumerate(display_history):
-            role = "You" if msg["role"] == "user" else "Gemini"
-            color = curses.color_pair(2) if msg["role"] == "user" else curses.color_pair(4)
-            text = msg["parts"][0]["text"][:width-10]
-            if start_y + idx < height - 5:
-                safe_addstr(stdscr, start_y + idx, 2, f"{role}: {text}", color | curses.A_BOLD)
-
-        input_y = height - 4
-        safe_addstr(stdscr, input_y, 2, "> ", curses.color_pair(4) | curses.A_BOLD)
-
-        curses.curs_set(1)
-        cmd_input = ""
-        start_x = 4
-
-        while True:
-            ch = stdscr.getch()
-            if ch == 10 or ch == 13:
-                break
-            elif ch in [8, 127, curses.KEY_BACKSPACE]:
-                if len(cmd_input) > 0:
-                    cmd_input = cmd_input[:-1]
-                    stdscr.move(input_y, start_x + len(cmd_input))
-                    stdscr.addch(" ")
-                    stdscr.move(input_y, start_x + len(cmd_input))
-            elif 32 <= ch <= 126:
-                if len(cmd_input) < 80:
-                    cmd_input += chr(ch)
-                    stdscr.addch(input_y, start_x + len(cmd_input) - 1, ch)
-            stdscr.refresh()
-
-        curses.curs_set(0)
-
-        if cmd_input.lower() in ["exit", "quit", "q"]:
-            break
-
-        if cmd_input.strip():
-            stdscr.erase()
-            safe_addstr(stdscr, height//2, width//2 - 15, "Thinking (Async Streaming)...", curses.color_pair(3) | curses.A_BOLD)
-            stdscr.refresh()
-
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                stdscr.erase()
-                safe_addstr(stdscr, 1, 2, "Gemini:", curses.color_pair(4) | curses.A_BOLD)
-                safe_hline(stdscr, 2, 0, "=", width, curses.color_pair(5))
-                
-                full_reply = ""
-                line_y = 4
-                current_line = ""
-                
-                async def stream_response():
-                    nonlocal full_reply, current_line
-                    async for chunk in get_ai_stream_response(user_id, cmd_input):
-                        full_reply += chunk
-                        current_line += chunk
-                        
-                        if len(current_line) > 50:
-                            current_line = "..."
-                        
-                        safe_addstr(stdscr, line_y, 2, current_line[:width-4], curses.color_pair(3) | curses.A_BOLD)
-                        stdscr.refresh()
-                
-                loop.run_until_complete(stream_response())
-                loop.close()
-                
-                if full_reply:
-                    stdscr.erase()
-                    safe_addstr(stdscr, 1, 2, "Gemini:", curses.color_pair(4) | curses.A_BOLD)
-                    safe_hline(stdscr, 2, 0, "=", width, curses.color_pair(5))
-                    
-                    reply_lines = full_reply.split('\n')
-                    for idx, line in enumerate(reply_lines[:15]):
-                        if idx < height - 8:
-                            safe_addstr(stdscr, 4 + idx, 2, line[:width-4], curses.color_pair(3))
-                    
-                    if len(reply_lines) > 15:
-                        safe_addstr(stdscr, 20, 2, f"... and {len(reply_lines)-15} more lines", curses.color_pair(2))
-                    
-                    safe_addstr(stdscr, height - 3, 2, "[ Press any key to continue ]", curses.color_pair(3))
-                    stdscr.refresh()
-                    stdscr.getch()
-                    
-                    history.append({"role": "model", "parts": [{"text": full_reply}]})
-                else:
-                    stdscr.erase()
-                    safe_addstr(stdscr, height//2, width//2 - 15, "No response received!", curses.color_pair(1) | curses.A_BOLD)
-                    stdscr.refresh()
-                    time.sleep(1.5)
-                    
-            except Exception as e:
-                stdscr.erase()
-                safe_addstr(stdscr, height//2, width//2 - 15, f"Error: {str(e)[:50]}", curses.color_pair(1) | curses.A_BOLD)
-                stdscr.refresh()
-                time.sleep(1.5)
-
-    stdscr.timeout(timeout_ms)
-    play_transition(stdscr)
-
-
-# ==========================================
-# EMAIL FUNCTIONS
-# ==========================================
 def save_antutu_score(score):
     try:
         with open(SCORE_FILE, "w") as f:
@@ -364,9 +109,6 @@ def send_email_notification(subject, body_text):
     except Exception as e:
         return False, f"Failed to send: {str(e)}"
 
-# ==========================================
-# HARDWARE FUNCTIONS
-# ==========================================
 def toggle_flashlight(state):
     try:
         if state:
@@ -401,9 +143,6 @@ def connect_to_wifi(ssid, password):
         return res.returncode == 0
     except: return False
 
-# ==========================================
-# HARDWARE INFO & BENCHMARK
-# ==========================================
 def get_hardware_info():
     soc_model = ""
     try:
@@ -468,9 +207,6 @@ def calculate_antutu_v11_score(bench_count):
 
 device_antutu_score = load_antutu_score()
 
-# ==========================================
-# GRAPHICS SETTINGS
-# ==========================================
 def check_processor_power():
     cores = multiprocessing.cpu_count()
     return 120 if cores >= 8 else 60
@@ -486,9 +222,6 @@ def update_timeout():
     global timeout_ms, current_fps
     timeout_ms = max(1, int(1000 / current_fps))
 
-# ==========================================
-# CURSES HELPERS
-# ==========================================
 def safe_addstr(stdscr, y, x, text, attr=0):
     try:
         height, width = stdscr.getmaxyx()
@@ -512,8 +245,8 @@ def play_transition(stdscr):
     delay = 0.6 / current_fps
     for i in range(0, mid_y + 1, max(1, mid_y // steps)):
         stdscr.erase()
-        safe_hline(stdscr, max(0, mid_y - i), 0, "-", width, curses.color_pair(5))
-        safe_hline(stdscr, min(height - 1, mid_y + i), 0, "-", width, curses.color_pair(5))
+        safe_hline(stdscr, max(0, mid_y - i), 0, "─", width, curses.color_pair(5))
+        safe_hline(stdscr, min(height - 1, mid_y + i), 0, "─", width, curses.color_pair(5))
         stdscr.refresh()
         time.sleep(delay)
 
@@ -523,9 +256,9 @@ def play_button_shrink(stdscr, y, x, text, color_pair):
     
     box_width = max(len(clean_text) + 4, 30)
     
-    short_box_top = " ┌" + "-" * (box_width - 2) + "┐ "
+    short_box_top = " ┌" + "─" * (box_width - 2) + "┐ "
     short_box_mid = f" │ {clean_text.center(box_width - 4)} │ "
-    short_box_bot = " └" + "-" * (box_width - 2) + "┘ "
+    short_box_bot = " └" + "─" * (box_width - 2) + "┘ "
     
     steps = max(3, int(current_fps / 15))
     delay = 0.8 / current_fps
@@ -540,10 +273,10 @@ def play_button_shrink(stdscr, y, x, text, color_pair):
         ratio = 1.0 - (step / steps) * 0.25
         new_width = max(10, int(box_width * ratio))
         
-        short_top = " ┌" + "-" * (new_width - 2) + "┐ "
+        short_top = " ┌" + "─" * (new_width - 2) + "┐ "
         mid_text = clean_text.center(new_width - 4)
         short_mid = f" │ {mid_text} │ " if len(mid_text) < new_width - 4 else f" │{clean_text[:new_width-6]}│ "
-        short_bot = " └" + "-" * (new_width - 2) + "┘ "
+        short_bot = " └" + "─" * (new_width - 2) + "┘ "
         
         safe_addstr(stdscr, y, x, short_top, curses.color_pair(color_pair) | curses.A_BOLD)
         safe_addstr(stdscr, y+1, x, short_mid, curses.color_pair(color_pair) | curses.A_BOLD)
@@ -584,13 +317,13 @@ def get_user_input(stdscr, y, x, prompt, mask=False):
     return input_str
 
 # ==========================================
-# UPDATE TOOL
+# UPDATE TOOL - Progress Bar
 # ==========================================
 def update_tool(stdscr):
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     
-    safe_addstr(stdscr, 2, width//2 - 15, "CHECKING FOR UPDATES...", curses.color_pair(5) | curses.A_BOLD)
+    safe_addstr(stdscr, 2, width//2 - 15, "🔄 CHECKING FOR UPDATES...", curses.color_pair(5) | curses.A_BOLD)
     stdscr.refresh()
     time.sleep(0.5)
     
@@ -604,7 +337,7 @@ def update_tool(stdscr):
         status = subprocess.run("git status -uno", shell=True, capture_output=True, text=True, timeout=5)
         
         if "Your branch is up to date" in status.stdout or "up to date" in status.stdout:
-            safe_addstr(stdscr, 7, width//2 - 15, "NO UPDATE AVAILABLE", curses.color_pair(4) | curses.A_BOLD)
+            safe_addstr(stdscr, 7, width//2 - 15, "✅ NO UPDATE AVAILABLE", curses.color_pair(4) | curses.A_BOLD)
             safe_addstr(stdscr, 8, width//2 - 15, "Your tool is already up to date!", curses.color_pair(2))
             stdscr.refresh()
             time.sleep(2)
@@ -625,18 +358,18 @@ def update_tool(stdscr):
         pull = subprocess.run("git pull", shell=True, capture_output=True, text=True, timeout=30)
         
         if "Already up to date" in pull.stdout:
-            safe_addstr(stdscr, 11, width//2 - 15, "NO UPDATE AVAILABLE", curses.color_pair(4) | curses.A_BOLD)
+            safe_addstr(stdscr, 11, width//2 - 15, "✅ NO UPDATE AVAILABLE", curses.color_pair(4) | curses.A_BOLD)
             safe_addstr(stdscr, 12, width//2 - 15, "Your tool is already up to date!", curses.color_pair(2))
             stdscr.refresh()
             time.sleep(2)
             return False
         
-        safe_addstr(stdscr, 11, width//2 - 15, "UPDATE COMPLETED SUCCESSFULLY!", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 11, width//2 - 15, "✅ UPDATE COMPLETED SUCCESSFULLY!", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 12, width//2 - 15, "Tool has been updated to the latest version!", curses.color_pair(2))
         
         try:
             version = subprocess.run("git log -1 --pretty=format:'%h - %s (%ar)'", shell=True, capture_output=True, text=True, timeout=5)
-            safe_addstr(stdscr, 14, width//2 - 15, f"New version: {version.stdout[:40]}", curses.color_pair(5))
+            safe_addstr(stdscr, 14, width//2 - 15, f"📌 New version: {version.stdout[:40]}", curses.color_pair(5))
         except:
             pass
         
@@ -645,40 +378,45 @@ def update_tool(stdscr):
         return True
         
     except subprocess.TimeoutExpired:
-        safe_addstr(stdscr, 7, width//2 - 15, "UPDATE TIMEOUT!", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, 7, width//2 - 15, "❌ UPDATE TIMEOUT!", curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(stdscr, 8, width//2 - 15, "Please check your internet connection.", curses.color_pair(1))
         stdscr.refresh()
         time.sleep(2)
         return False
     except Exception as e:
-        safe_addstr(stdscr, 7, width//2 - 15, f"ERROR: {str(e)[:30]}", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, 7, width//2 - 15, f"❌ ERROR: {str(e)[:30]}", curses.color_pair(1) | curses.A_BOLD)
         stdscr.refresh()
         time.sleep(2)
         return False
 
 # ==========================================
-# TERMUX MENU
+# TERMUX MENU - گۆڕدراوە
 # ==========================================
 def termux_menu(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     while True:
         stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "TERMUX TOOLS", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 1, 4, "📦 TERMUX TOOLS", curses.color_pair(5) | curses.A_BOLD)
         
-        safe_addstr(stdscr, 3, 4, "┌" + "-" * 50 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 4, 4, "│  [1] Termux Setup - Full Installation         │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 5, 4, "└" + "-" * 50 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, 3, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 4, 4, "│  [1] Termux Setup - System Setup             │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 5, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
         
-        safe_addstr(stdscr, 7, 4, "┌" + "-" * 50 + "┐", curses.color_pair(3))
-        safe_addstr(stdscr, 8, 4, "│  [2] Termux API - Install Real API Packages  │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 9, 4, "└" + "-" * 50 + "┘", curses.color_pair(3))
+        safe_addstr(stdscr, 7, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
+        safe_addstr(stdscr, 8, 4, "│  [2] Termux API - Install API Packages       │", curses.color_pair(3) | curses.A_BOLD)
+        safe_addstr(stdscr, 9, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
         
-        safe_addstr(stdscr, 11, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 11, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, 12, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 13, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 13, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
         
         stdscr.noutrefresh()
         curses.doupdate()
@@ -696,10 +434,10 @@ def termux_menu(stdscr):
                     if 11 <= my <= 13 and 4 <= mx <= 24:
                         break
                     elif 3 <= my <= 5 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 3, 4, "┌" + "-" * 50 + "┐", 4)
+                        play_button_shrink(stdscr, 3, 4, "┌" + "─" * 50 + "┐", 4)
                         termux_setup(stdscr)
                     elif 7 <= my <= 9 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 7, 4, "┌" + "-" * 50 + "┐", 3)
+                        play_button_shrink(stdscr, 7, 4, "┌" + "─" * 50 + "┐", 3)
                         termux_api_install(stdscr)
             except: pass
         elif key == ord('\n') or key == ord('q'):
@@ -707,29 +445,30 @@ def termux_menu(stdscr):
     
     play_transition(stdscr)
 
+# ==========================================
+# TERMUX SETUP - گۆڕدراوە
+# ==========================================
 def termux_setup(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     stdscr.erase()
-    safe_addstr(stdscr, 1, 4, "TERMUX FULL SETUP", curses.color_pair(5) | curses.A_BOLD)
-    safe_addstr(stdscr, 3, 4, "Starting full Termux setup...", curses.color_pair(2))
-    safe_addstr(stdscr, 4, 4, "This may take a few minutes...", curses.color_pair(3))
+    safe_addstr(stdscr, 1, 4, "🔧 TERMUX SYSTEM SETUP", curses.color_pair(5) | curses.A_BOLD)
+    safe_addstr(stdscr, 3, 4, "Starting Termux system setup...", curses.color_pair(2))
+    safe_addstr(stdscr, 4, 4, "This will configure your Termux environment.", curses.color_pair(3))
     stdscr.refresh()
     
     commands = [
-        "pkg update -y", "pkg upgrade -y", "pkg install python3 -y",
-        "pkg install python3-pip -y", "pkg install git -y", "pkg install curl -y",
-        "pkg install wget -y", "pkg install nano -y", "pkg install vim -y",
-        "pkg install termux-api -y", "pkg install termux-tools -y",
-        "pkg install openssh -y", "pkg install net-tools -y",
-        "pkg install dnsutils -y", "pkg install nmap -y",
-        "pkg install zip -y", "pkg install unzip -y", "pkg install tar -y",
-        "pkg install ncurses-utils -y", "pkg install termux-exec -y",
-        "pip install --upgrade pip", "pip install requests",
-        "pip install beautifulsoup4", "pip install colorama", "pip install tqdm",
-        "pip install aiohttp"
+        "pkg update && pkg upgrade -y",
+        "termux-setup-storage",
+        "termux-change-repo",
+        "pkg install git curl wget python clang make -y"
     ]
     
     success_count = 0
@@ -739,52 +478,55 @@ def termux_setup(stdscr):
         try:
             safe_addstr(stdscr, 6, 4, f"Processing: {idx+1}/{total} - {cmd[:30]}...", curses.color_pair(3))
             stdscr.refresh()
-            result = subprocess.run(cmd, shell=True, timeout=120, capture_output=True)
+            result = subprocess.run(cmd, shell=True, timeout=300, capture_output=True)
             if result.returncode == 0:
                 success_count += 1
+                safe_addstr(stdscr, 8 + idx, 6, f"✅ {cmd[:30]}... done", curses.color_pair(4))
+            else:
+                safe_addstr(stdscr, 8 + idx, 6, f"❌ {cmd[:30]}... failed", curses.color_pair(1))
+            stdscr.refresh()
         except:
-            pass
+            safe_addstr(stdscr, 8 + idx, 6, f"❌ {cmd[:30]}... timeout", curses.color_pair(1))
+            stdscr.refresh()
     
-    safe_addstr(stdscr, 8, 4, f"Setup Complete! {success_count}/{total} packages installed.", curses.color_pair(4) if success_count > total/2 else curses.color_pair(1))
+    safe_addstr(stdscr, 12, 4, f"✅ Setup Complete! {success_count}/{total} tasks completed.", curses.color_pair(4) if success_count > total/2 else curses.color_pair(1))
     
-    safe_addstr(stdscr, 10, 4, "[ Press any key to go back ]", curses.color_pair(3))
+    safe_addstr(stdscr, 14, 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
     stdscr.getch()
     play_transition(stdscr)
 
+# ==========================================
+# TERMUX API - گۆڕدراوە (تەنها pkg install termux-api -y)
+# ==========================================
 def termux_api_install(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     stdscr.erase()
-    safe_addstr(stdscr, 1, 4, "TERMUX API INSTALLATION", curses.color_pair(5) | curses.A_BOLD)
-    safe_addstr(stdscr, 3, 4, "Installing Termux API packages...", curses.color_pair(2))
-    safe_addstr(stdscr, 4, 4, "Only real existing packages will be installed.", curses.color_pair(3))
+    safe_addstr(stdscr, 1, 4, "📦 TERMUX API INSTALLATION", curses.color_pair(5) | curses.A_BOLD)
+    safe_addstr(stdscr, 3, 4, "Installing Termux API...", curses.color_pair(2))
     stdscr.refresh()
     
-    real_packages = ["termux-api", "termux-tools", "termux-exec"]
-    success_count = 0
-    total = len(real_packages)
+    try:
+        safe_addstr(stdscr, 5, 4, "Installing: termux-api...", curses.color_pair(3))
+        stdscr.refresh()
+        result = subprocess.run("pkg install termux-api -y", shell=True, timeout=120, capture_output=True)
+        if result.returncode == 0:
+            safe_addstr(stdscr, 7, 4, "✅ termux-api installed successfully!", curses.color_pair(4))
+        else:
+            safe_addstr(stdscr, 7, 4, "❌ termux-api installation failed!", curses.color_pair(1))
+    except:
+        safe_addstr(stdscr, 7, 4, "❌ termux-api installation timeout!", curses.color_pair(1))
     
-    for idx, pkg in enumerate(real_packages):
-        try:
-            safe_addstr(stdscr, 6, 4, f"Installing: {pkg} ({idx+1}/{total})...", curses.color_pair(3))
-            stdscr.refresh()
-            result = subprocess.run(f"pkg install {pkg} -y", shell=True, timeout=60, capture_output=True)
-            if result.returncode == 0:
-                success_count += 1
-                safe_addstr(stdscr, 8 + idx, 6, f" {pkg} installed successfully", curses.color_pair(4))
-            else:
-                safe_addstr(stdscr, 8 + idx, 6, f" {pkg} failed", curses.color_pair(1))
-            stdscr.refresh()
-        except Exception as e:
-            safe_addstr(stdscr, 8 + idx, 6, f" {pkg} error", curses.color_pair(1))
-            stdscr.refresh()
-    
-    safe_addstr(stdscr, 12 + total, 4, f"Done! {success_count}/{total} packages installed.", curses.color_pair(4))
-    safe_addstr(stdscr, 14 + total, 4, "[ Press any key to go back ]", curses.color_pair(3))
+    safe_addstr(stdscr, 10, 4, "[ Press any key to go back ]", curses.color_pair(3))
     stdscr.noutrefresh()
     curses.doupdate()
     stdscr.getch()
@@ -795,12 +537,17 @@ def termux_api_install(stdscr):
 # ==========================================
 def devices_menu(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     try:
         stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "Installing Android Tools...", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 1, 4, "🔧 Installing Android Tools...", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 3, 4, "Please wait...", curses.color_pair(2))
         stdscr.refresh()
         subprocess.run("pkg install android-tools -y", shell=True, timeout=120)
@@ -809,19 +556,19 @@ def devices_menu(stdscr):
     
     while True:
         stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "DEVICES CONTROL", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 1, 4, "🔌 DEVICES CONTROL", curses.color_pair(5) | curses.A_BOLD)
         
-        safe_addstr(stdscr, 3, 4, "┌" + "-" * 50 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 3, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
         safe_addstr(stdscr, 4, 4, "│  [1] ADB - Android Debug Bridge              │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 5, 4, "└" + "-" * 50 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, 5, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
         
-        safe_addstr(stdscr, 7, 4, "┌" + "-" * 50 + "┐", curses.color_pair(3))
+        safe_addstr(stdscr, 7, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
         safe_addstr(stdscr, 8, 4, "│  [2] FASTBOOT - Bootloader Mode              │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 9, 4, "└" + "-" * 50 + "┘", curses.color_pair(3))
+        safe_addstr(stdscr, 9, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
         
-        safe_addstr(stdscr, 11, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 11, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, 12, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 13, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 13, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
         
         stdscr.noutrefresh()
         curses.doupdate()
@@ -839,10 +586,10 @@ def devices_menu(stdscr):
                     if 11 <= my <= 13 and 4 <= mx <= 24:
                         break
                     elif 3 <= my <= 5 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 3, 4, "┌" + "-" * 50 + "┐", 4)
+                        play_button_shrink(stdscr, 3, 4, "┌" + "─" * 50 + "┐", 4)
                         adb_command_mode(stdscr)
                     elif 7 <= my <= 9 and 4 <= mx <= 54:
-                        play_button_shrink(stdscr, 7, 4, "┌" + "-" * 50 + "┐", 3)
+                        play_button_shrink(stdscr, 7, 4, "┌" + "─" * 50 + "┐", 3)
                         fastboot_command_mode(stdscr)
             except: pass
         elif key == ord('\n') or key == ord('q'):
@@ -852,15 +599,20 @@ def devices_menu(stdscr):
 
 def adb_command_mode(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(-1)
     
     while True:
         stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "ADB COMMAND MODE", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 1, 4, "🔧 ADB COMMAND MODE", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 3, 4, "Type 'exit' to go back", curses.color_pair(3))
         safe_addstr(stdscr, 4, 4, "Example: adb devices, adb shell, adb install app.apk", curses.color_pair(2))
-        safe_hline(stdscr, 5, 0, "-", 60, curses.color_pair(4))
+        safe_hline(stdscr, 5, 0, "─", 60, curses.color_pair(4))
         safe_addstr(stdscr, 7, 4, "> ", curses.color_pair(4) | curses.A_BOLD)
         
         curses.curs_set(1)
@@ -890,23 +642,23 @@ def adb_command_mode(stdscr):
             break
         elif cmd_input.strip():
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, "Executing...", curses.color_pair(3))
+            safe_addstr(stdscr, 1, 4, "⏳ Executing...", curses.color_pair(3))
             stdscr.refresh()
             
             try:
                 result = subprocess.run(cmd_input, shell=True, timeout=30, capture_output=True, text=True)
                 output = result.stdout + result.stderr
                 stdscr.erase()
-                safe_addstr(stdscr, 1, 4, "Command Output:", curses.color_pair(4) | curses.A_BOLD)
+                safe_addstr(stdscr, 1, 4, "📋 Command Output:", curses.color_pair(4) | curses.A_BOLD)
                 lines = output.split('\n')
                 for idx, line in enumerate(lines[:15]):
                     safe_addstr(stdscr, 3 + idx, 4, line[:60], curses.color_pair(2))
                 if len(lines) > 15:
                     safe_addstr(stdscr, 19, 4, f"... and {len(lines)-15} more lines", curses.color_pair(3))
             except subprocess.TimeoutExpired:
-                safe_addstr(stdscr, 3, 4, "Command timeout!", curses.color_pair(1))
+                safe_addstr(stdscr, 3, 4, "❌ Command timeout!", curses.color_pair(1))
             except Exception as e:
-                safe_addstr(stdscr, 3, 4, f"Error: {str(e)[:50]}", curses.color_pair(1))
+                safe_addstr(stdscr, 3, 4, f"❌ Error: {str(e)[:50]}", curses.color_pair(1))
             
             safe_addstr(stdscr, 21, 4, "[ Press any key to continue ]", curses.color_pair(3))
             stdscr.refresh()
@@ -917,15 +669,20 @@ def adb_command_mode(stdscr):
 
 def fastboot_command_mode(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(-1)
     
     while True:
         stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "FASTBOOT COMMAND MODE", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 1, 4, "⚡ FASTBOOT COMMAND MODE", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 3, 4, "Type 'exit' to go back", curses.color_pair(3))
         safe_addstr(stdscr, 4, 4, "Example: fastboot devices, fastboot reboot", curses.color_pair(2))
-        safe_hline(stdscr, 5, 0, "-", 60, curses.color_pair(4))
+        safe_hline(stdscr, 5, 0, "─", 60, curses.color_pair(4))
         safe_addstr(stdscr, 7, 4, "> ", curses.color_pair(4) | curses.A_BOLD)
         
         curses.curs_set(1)
@@ -955,23 +712,23 @@ def fastboot_command_mode(stdscr):
             break
         elif cmd_input.strip():
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, "Executing...", curses.color_pair(3))
+            safe_addstr(stdscr, 1, 4, "⏳ Executing...", curses.color_pair(3))
             stdscr.refresh()
             
             try:
                 result = subprocess.run(cmd_input, shell=True, timeout=30, capture_output=True, text=True)
                 output = result.stdout + result.stderr
                 stdscr.erase()
-                safe_addstr(stdscr, 1, 4, "Command Output:", curses.color_pair(4) | curses.A_BOLD)
+                safe_addstr(stdscr, 1, 4, "📋 Command Output:", curses.color_pair(4) | curses.A_BOLD)
                 lines = output.split('\n')
                 for idx, line in enumerate(lines[:15]):
                     safe_addstr(stdscr, 3 + idx, 4, line[:60], curses.color_pair(2))
                 if len(lines) > 15:
                     safe_addstr(stdscr, 19, 4, f"... and {len(lines)-15} more lines", curses.color_pair(3))
             except subprocess.TimeoutExpired:
-                safe_addstr(stdscr, 3, 4, "Command timeout!", curses.color_pair(1))
+                safe_addstr(stdscr, 3, 4, "❌ Command timeout!", curses.color_pair(1))
             except Exception as e:
-                safe_addstr(stdscr, 3, 4, f"Error: {str(e)[:50]}", curses.color_pair(1))
+                safe_addstr(stdscr, 3, 4, f"❌ Error: {str(e)[:50]}", curses.color_pair(1))
             
             safe_addstr(stdscr, 21, 4, "[ Press any key to continue ]", curses.color_pair(3))
             stdscr.refresh()
@@ -1040,22 +797,27 @@ def get_wifi_location():
 
 def wifi_settings_menu(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     while True:
         try:
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, "WIFI SETTINGS", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 1, 4, "📶 WIFI SETTINGS", curses.color_pair(5) | curses.A_BOLD)
             
             info = get_wifi_info()
             dbm = info['dbm']
             ssid = info['ssid']
             quality = get_signal_quality(dbm)
             
-            safe_addstr(stdscr, 3, 4, f"SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
-            safe_addstr(stdscr, 4, 4, f"Signal: {dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
-            safe_addstr(stdscr, 5, 4, f"Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+            safe_addstr(stdscr, 3, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 4, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3) | curses.A_BOLD)
+            safe_addstr(stdscr, 5, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
             
             bar_length = 35
             filled = int((dbm + 100) / 50 * bar_length)
@@ -1063,25 +825,25 @@ def wifi_settings_menu(stdscr):
             bar = "█" * filled + "░" * (bar_length - filled)
             safe_addstr(stdscr, 7, 4, f"[{bar}]", curses.color_pair(3))
             
-            safe_addstr(stdscr, 9, 4, "┌" + "-" * 50 + "┐", curses.color_pair(4))
+            safe_addstr(stdscr, 9, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
             safe_addstr(stdscr, 10, 4, "│  [1] WIFI AR - Signal Strength Monitor      │", curses.color_pair(4) | curses.A_BOLD)
-            safe_addstr(stdscr, 11, 4, "└" + "-" * 50 + "┘", curses.color_pair(4))
+            safe_addstr(stdscr, 11, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
             
-            safe_addstr(stdscr, 13, 4, "┌" + "-" * 50 + "┐", curses.color_pair(3))
+            safe_addstr(stdscr, 13, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
             safe_addstr(stdscr, 14, 4, "│  [2] WIFI SCANNER - Connected Devices       │", curses.color_pair(3) | curses.A_BOLD)
-            safe_addstr(stdscr, 15, 4, "└" + "-" * 50 + "┘", curses.color_pair(3))
+            safe_addstr(stdscr, 15, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
             
-            safe_addstr(stdscr, 17, 4, "┌" + "-" * 50 + "┐", curses.color_pair(5))
+            safe_addstr(stdscr, 17, 4, "┌" + "─" * 50 + "┐", curses.color_pair(5))
             safe_addstr(stdscr, 18, 4, "│  [3] WIFI LOCATION - Network Location        │", curses.color_pair(5) | curses.A_BOLD)
-            safe_addstr(stdscr, 19, 4, "└" + "-" * 50 + "┘", curses.color_pair(5))
+            safe_addstr(stdscr, 19, 4, "└" + "─" * 50 + "┘", curses.color_pair(5))
             
-            safe_addstr(stdscr, 21, 4, "┌" + "-" * 50 + "┐", curses.color_pair(2))
+            safe_addstr(stdscr, 21, 4, "┌" + "─" * 50 + "┐", curses.color_pair(2))
             safe_addstr(stdscr, 22, 4, "│  [4] Scan Nearby Networks                   │", curses.color_pair(2) | curses.A_BOLD)
-            safe_addstr(stdscr, 23, 4, "└" + "-" * 50 + "┘", curses.color_pair(2))
+            safe_addstr(stdscr, 23, 4, "└" + "─" * 50 + "┘", curses.color_pair(2))
             
-            safe_addstr(stdscr, 25, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+            safe_addstr(stdscr, 25, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
             safe_addstr(stdscr, 26, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-            safe_addstr(stdscr, 27, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+            safe_addstr(stdscr, 27, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
             
             stdscr.noutrefresh()
             curses.doupdate()
@@ -1103,16 +865,16 @@ def wifi_settings_menu(stdscr):
                         if 25 <= my <= 27 and 4 <= mx <= 24:
                             break
                         elif 9 <= my <= 11 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 9, 4, "┌" + "-" * 50 + "┐", 4)
+                            play_button_shrink(stdscr, 9, 4, "┌" + "─" * 50 + "┐", 4)
                             wifi_ar_monitor(stdscr)
                         elif 13 <= my <= 15 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 13, 4, "┌" + "-" * 50 + "┐", 3)
+                            play_button_shrink(stdscr, 13, 4, "┌" + "─" * 50 + "┐", 3)
                             wifi_scanner(stdscr)
                         elif 17 <= my <= 19 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 17, 4, "┌" + "-" * 50 + "┐", 5)
+                            play_button_shrink(stdscr, 17, 4, "┌" + "─" * 50 + "┐", 5)
                             wifi_location(stdscr)
                         elif 21 <= my <= 23 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 21, 4, "┌" + "-" * 50 + "┐", 2)
+                            play_button_shrink(stdscr, 21, 4, "┌" + "─" * 50 + "┐", 2)
                             scan_nearby(stdscr)
                 except: pass
             elif key == ord('\n') or key == ord('q'):
@@ -1124,6 +886,11 @@ def wifi_settings_menu(stdscr):
 
 def wifi_ar_monitor(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(300)
     
@@ -1131,7 +898,7 @@ def wifi_ar_monitor(stdscr):
     while running:
         try:
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, "WIFI AR - Signal Monitor", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 1, 4, "📡 WIFI AR - Signal Monitor", curses.color_pair(5) | curses.A_BOLD)
             
             info = get_wifi_info()
             dbm = info['dbm']
@@ -1166,6 +933,11 @@ def wifi_ar_monitor(stdscr):
 
 def wifi_scanner(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
@@ -1174,7 +946,7 @@ def wifi_scanner(stdscr):
     while True:
         try:
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, f"WIFI SCANNER - {len(devices)} Devices Found", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 1, 4, f"📱 WIFI SCANNER - {len(devices)} Devices Found", curses.color_pair(5) | curses.A_BOLD)
             
             for idx, dev in enumerate(devices[:8]):
                 color = curses.color_pair(2) if idx == 0 else curses.color_pair(3)
@@ -1197,7 +969,7 @@ def wifi_scanner(stdscr):
                         choice = int(input("> ")) - 1
                         if 0 <= choice < len(devices):
                             removed = devices.pop(choice)
-                            print(f"Removed: {removed['ip']}")
+                            print(f"✅ Removed: {removed['ip']}")
                         input("\nPress Enter...")
                     except:
                         pass
@@ -1219,21 +991,26 @@ def wifi_scanner(stdscr):
 
 def wifi_location(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     while True:
         try:
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, "WIFI LOCATION", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 1, 4, "📍 WIFI LOCATION", curses.color_pair(5) | curses.A_BOLD)
             
             location = get_wifi_location()
             info = get_wifi_info()
             
-            safe_addstr(stdscr, 4, 4, f"City: {location}", curses.color_pair(2) | curses.A_BOLD)
-            safe_addstr(stdscr, 5, 4, f"SSID: {info['ssid']}", curses.color_pair(3))
-            safe_addstr(stdscr, 6, 4, f"Signal: {info['dbm']} dBm", curses.color_pair(4))
-            safe_addstr(stdscr, 7, 4, f"Quality: {get_signal_quality(info['dbm'])}", curses.color_pair(2))
+            safe_addstr(stdscr, 4, 4, f"📍 City: {location}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 5, 4, f"📶 SSID: {info['ssid']}", curses.color_pair(3))
+            safe_addstr(stdscr, 6, 4, f"📊 Signal: {info['dbm']} dBm", curses.color_pair(4))
+            safe_addstr(stdscr, 7, 4, f"⭐ Quality: {get_signal_quality(info['dbm'])}", curses.color_pair(2))
             
             safe_addstr(stdscr, 9, 4, "[1] Get IP Location  |  [2] Network Info  |  [G] Go Back", curses.color_pair(3))
             
@@ -1244,29 +1021,29 @@ def wifi_location(stdscr):
             if key == ord('1'):
                 curses.endwin()
                 os.system("clear")
-                print("\nGetting IP Location...")
+                print("\n📍 Getting IP Location...")
                 try:
                     result = subprocess.check_output("curl -s ipinfo.io", shell=True, timeout=10).decode()
                     data = json.loads(result)
-                    print(f"\nIP: {data.get('ip', 'Unknown')}")
-                    print(f"City: {data.get('city', 'Unknown')}")
-                    print(f"Region: {data.get('region', 'Unknown')}")
-                    print(f"Country: {data.get('country', 'Unknown')}")
-                    print(f"Location: {data.get('loc', 'Unknown')}")
+                    print(f"\n🌐 IP: {data.get('ip', 'Unknown')}")
+                    print(f"📍 City: {data.get('city', 'Unknown')}")
+                    print(f"🏙️ Region: {data.get('region', 'Unknown')}")
+                    print(f"🌍 Country: {data.get('country', 'Unknown')}")
+                    print(f"📌 Location: {data.get('loc', 'Unknown')}")
                 except:
-                    print("Failed to get location")
+                    print("❌ Failed to get location")
                 input("\nPress Enter...")
                 stdscr = curses.initscr()
                 stdscr.timeout(timeout_ms)
             elif key == ord('2'):
                 curses.endwin()
                 os.system("clear")
-                print("\nNetwork Information:")
+                print("\n📶 Network Information:")
                 try:
                     result = subprocess.check_output("ip addr", shell=True, timeout=5).decode()
                     print(result[:500])
                 except:
-                    print("Failed to get network info")
+                    print("❌ Failed to get network info")
                 input("\nPress Enter...")
                 stdscr = curses.initscr()
                 stdscr.timeout(timeout_ms)
@@ -1286,11 +1063,16 @@ def wifi_location(stdscr):
 
 def scan_nearby(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
     stdscr.erase()
-    safe_addstr(stdscr, 1, 4, "Scanning Nearby Networks...", curses.color_pair(5) | curses.A_BOLD)
+    safe_addstr(stdscr, 1, 4, "📡 Scanning Nearby Networks...", curses.color_pair(5) | curses.A_BOLD)
     safe_addstr(stdscr, 3, 4, "Please wait...", curses.color_pair(2))
     stdscr.refresh()
     
@@ -1299,7 +1081,7 @@ def scan_nearby(stdscr):
     while True:
         try:
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, f"Nearby Networks - {len(networks)} Found", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 1, 4, f"📡 Nearby Networks - {len(networks)} Found", curses.color_pair(5) | curses.A_BOLD)
             
             for idx, ssid in enumerate(networks[:8]):
                 safe_addstr(stdscr, 4 + idx, 4, f"  {idx+1}. {ssid}", curses.color_pair(2))
@@ -1319,8 +1101,16 @@ def scan_nearby(stdscr):
     
     play_transition(stdscr)
 
+# ==========================================
+# بەشەکانی تر (Antutu, Game, Hardware, Advanced, Main)
+# ==========================================
 def antutu_test_menu(stdscr):
     global timeout_ms, device_antutu_score
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     bench_result = 0
@@ -1332,26 +1122,26 @@ def antutu_test_menu(stdscr):
         safe_addstr(stdscr, 1, 4, "=== AnTuTu v11 Real Benchmarking ===", curses.color_pair(5) | curses.A_BOLD)
         saved_score = load_antutu_score()
         if saved_score == 0:
-            safe_addstr(stdscr, 7, 4, "┌" + "-" * 50 + "┐", curses.color_pair(4))
+            safe_addstr(stdscr, 7, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
             safe_addstr(stdscr, 8, 4, "│          [ RUN BENCHMARK NOW ]             │", curses.color_pair(4) | curses.A_BOLD)
-            safe_addstr(stdscr, 9, 4, "└" + "-" * 50 + "┘", curses.color_pair(4))
+            safe_addstr(stdscr, 9, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
         else:
-            safe_addstr(stdscr, 4, 4, "┌" + "-" * 55 + "┐", curses.color_pair(3))
+            safe_addstr(stdscr, 4, 4, "┌" + "─" * 55 + "┐", curses.color_pair(3))
             safe_addstr(stdscr, 5, 4, f"│  Detected SoC:   {real_hardware:<35} │", curses.color_pair(3) | curses.A_BOLD)
             safe_addstr(stdscr, 6, 4, f"│  CPU Cores:      {cpu_cores:<35} │", curses.color_pair(2))
             safe_addstr(stdscr, 7, 4, f"│  AnTuTu Score:   {saved_score:,} Pts                   │", curses.color_pair(1) | curses.A_BOLD)
-            safe_addstr(stdscr, 8, 4, "└" + "-" * 55 + "┘", curses.color_pair(3))
-            safe_addstr(stdscr, 10, 4, "┌" + "-" * 50 + "┐", curses.color_pair(5))
+            safe_addstr(stdscr, 8, 4, "└" + "─" * 55 + "┘", curses.color_pair(3))
+            safe_addstr(stdscr, 10, 4, "┌" + "─" * 50 + "┐", curses.color_pair(5))
             safe_addstr(stdscr, 11, 4, "│          [ SEND SCORE TO GMAIL ]             │", curses.color_pair(5) | curses.A_BOLD)
-            safe_addstr(stdscr, 12, 4, "└" + "-" * 50 + "┘", curses.color_pair(5))
-            safe_addstr(stdscr, 14, 4, "┌" + "-" * 50 + "┐", curses.color_pair(3))
+            safe_addstr(stdscr, 12, 4, "└" + "─" * 50 + "┘", curses.color_pair(5))
+            safe_addstr(stdscr, 14, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
             safe_addstr(stdscr, 15, 4, "│             [ RE-RUN TEST ]                │", curses.color_pair(3) | curses.A_BOLD)
-            safe_addstr(stdscr, 16, 4, "└" + "-" * 50 + "┘", curses.color_pair(3))
+            safe_addstr(stdscr, 16, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
         if email_status_msg:
             safe_addstr(stdscr, 18, 4, f"Info: {email_status_msg}", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 20, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 20, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, 21, 4, "│   [Go Back]   │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 22, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 22, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
         stdscr.noutrefresh()
         curses.doupdate()
         key = stdscr.getch()
@@ -1361,7 +1151,7 @@ def antutu_test_menu(stdscr):
                 if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
                     if saved_score == 0:
                         if 7 <= my <= 9 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 7, 4, "┌" + "-" * 50 + "┐", 4)
+                            play_button_shrink(stdscr, 7, 4, "┌" + "─" * 50 + "┐", 4)
                             stdscr.erase()
                             safe_addstr(stdscr, 10, 10, "BENCHMARKING CPU CORES... PLEASE WAIT", curses.color_pair(1) | curses.A_BOLD)
                             stdscr.refresh()
@@ -1371,7 +1161,7 @@ def antutu_test_menu(stdscr):
                             email_status_msg = ""
                     else:
                         if 10 <= my <= 12 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 10, 4, "┌" + "-" * 50 + "┐", 5)
+                            play_button_shrink(stdscr, 10, 4, "┌" + "─" * 50 + "┐", 5)
                             stdscr.erase()
                             safe_addstr(stdscr, 10, 10, "Connecting to Gmail & Sending...", curses.color_pair(3) | curses.A_BOLD)
                             stdscr.refresh()
@@ -1381,17 +1171,22 @@ def antutu_test_menu(stdscr):
                             email_status_msg = msg
                             stdscr.timeout(timeout_ms)
                         elif 14 <= my <= 16 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 14, 4, "┌" + "-" * 50 + "┐", 3)
+                            play_button_shrink(stdscr, 14, 4, "┌" + "─" * 50 + "┐", 3)
                             save_antutu_score(0)
                             email_status_msg = ""
                     if 20 <= my <= 22 and 4 <= mx <= 24:
-                        play_button_shrink(stdscr, 20, 4, "┌" + "-" * 20 + "┐", 1)
+                        play_button_shrink(stdscr, 20, 4, "┌" + "─" * 20 + "┐", 1)
                         play_transition(stdscr)
                         break
             except: pass
 
 def run_fps_test_game(stdscr):
     global current_fps, current_hz, timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     
     curses.curs_set(0)
@@ -1443,10 +1238,10 @@ def run_fps_test_game(stdscr):
         ground_y = height - 3
         frame += 1
         
-        safe_hline(stdscr, 0, 0, "=", width, curses.color_pair(5))
-        info_text = f"CHROME DINO | SCORE: {score} | HIGH: {high_score} | SPEED: {game_speed:.1f} | {current_hz}Hz/{current_fps}FPS"
+        safe_hline(stdscr, 0, 0, "═", width, curses.color_pair(5))
+        info_text = f"🦕 CHROME DINO | SCORE: {score} | HIGH: {high_score} | SPEED: {game_speed:.1f} | {current_hz}Hz/{current_fps}FPS"
         safe_addstr(stdscr, 0, 2, info_text, curses.color_pair(4) | curses.A_BOLD)
-        safe_hline(stdscr, 1, 0, "=", width, curses.color_pair(5))
+        safe_hline(stdscr, 1, 0, "═", width, curses.color_pair(5))
         
         safe_hline(stdscr, sky_y, 0, " ", width, curses.color_pair(2))
         safe_addstr(stdscr, sky_y, 2, "☀️", curses.color_pair(5))
@@ -1513,19 +1308,19 @@ def run_fps_test_game(stdscr):
         
         jump_btn_x = width - 18
         jump_btn_y = height - 7
-        safe_addstr(stdscr, jump_btn_y, jump_btn_x, "┌" + "-" * 16 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, jump_btn_y, jump_btn_x, "┌" + "─" * 16 + "┐", curses.color_pair(4))
         safe_addstr(stdscr, jump_btn_y + 1, jump_btn_x, "│   JUMP ↑  │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, jump_btn_y + 2, jump_btn_x, "└" + "-" * 16 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, jump_btn_y + 2, jump_btn_x, "└" + "─" * 16 + "┘", curses.color_pair(4))
         
         btn_x = width - 18
         btn_y = height - 1
-        safe_addstr(stdscr, btn_y - 2, btn_x, "┌" + "-" * 16 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, btn_y - 2, btn_x, "┌" + "─" * 16 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, btn_y - 1, btn_x, "│   [ Back ]  │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, btn_y, btn_x, "└" + "-" * 16 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, btn_y, btn_x, "└" + "─" * 16 + "┘", curses.color_pair(1))
         
         if game_over:
             safe_addstr(stdscr, height // 2 - 3, width // 2 - 14, "╔════════════════════════════╗", curses.color_pair(1))
-            safe_addstr(stdscr, height // 2 - 2, width // 2 - 14, "║       GAME OVER       ║", curses.color_pair(1) | curses.A_BOLD)
+            safe_addstr(stdscr, height // 2 - 2, width // 2 - 14, "║       💀 GAME OVER 💀      ║", curses.color_pair(1) | curses.A_BOLD)
             safe_addstr(stdscr, height // 2 - 1, width // 2 - 14, f"║      SCORE: {score}         ║", curses.color_pair(3) | curses.A_BOLD)
             safe_addstr(stdscr, height // 2, width // 2 - 14, f"║      HIGH: {high_score}      ║", curses.color_pair(4) | curses.A_BOLD)
             safe_addstr(stdscr, height // 2 + 1, width // 2 - 14, "║   SPACE or Click to Restart ║", curses.color_pair(2))
@@ -1588,6 +1383,11 @@ flash_active = False
 
 def hardware_controls_menu(stdscr):
     global timeout_ms, flash_active
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     wifi_list = []
@@ -1597,28 +1397,28 @@ def hardware_controls_menu(stdscr):
     while True:
         try:
             stdscr.erase()
-            safe_addstr(stdscr, 1, 4, "HARDWARE & WIFI CONTROL", curses.color_pair(5) | curses.A_BOLD)
+            safe_addstr(stdscr, 1, 4, "🔧 HARDWARE & WIFI CONTROL", curses.color_pair(5) | curses.A_BOLD)
             
             flash_bar = "[ OFF ──────● ON ]" if flash_active else "[ OFF ●────── ON ]"
             flash_color = curses.color_pair(4) if flash_active else curses.color_pair(1)
             safe_addstr(stdscr, 3, 4, "LED Flash State:", curses.color_pair(2) | curses.A_BOLD)
             safe_addstr(stdscr, 4, 4, f"{flash_bar}", flash_color | curses.A_BOLD)
             
-            safe_addstr(stdscr, 6, 4, "┌" + "-" * 50 + "┐", curses.color_pair(4))
+            safe_addstr(stdscr, 6, 4, "┌" + "─" * 50 + "┐", curses.color_pair(4))
             safe_addstr(stdscr, 7, 4, "│          [ VIBRATE PHONE ]                  │", curses.color_pair(4) | curses.A_BOLD)
-            safe_addstr(stdscr, 8, 4, "└" + "-" * 50 + "┘", curses.color_pair(4))
+            safe_addstr(stdscr, 8, 4, "└" + "─" * 50 + "┘", curses.color_pair(4))
             
-            safe_addstr(stdscr, 10, 4, "┌" + "-" * 50 + "┐", curses.color_pair(3))
-            safe_addstr(stdscr, 11, 4, "│          [ WIFI SETTINGS ]              │", curses.color_pair(3) | curses.A_BOLD)
-            safe_addstr(stdscr, 12, 4, "└" + "-" * 50 + "┘", curses.color_pair(3))
+            safe_addstr(stdscr, 10, 4, "┌" + "─" * 50 + "┐", curses.color_pair(3))
+            safe_addstr(stdscr, 11, 4, "│          [ WIFI SETTINGS 📶 ]              │", curses.color_pair(3) | curses.A_BOLD)
+            safe_addstr(stdscr, 12, 4, "└" + "─" * 50 + "┘", curses.color_pair(3))
             
             info = get_wifi_info()
             dbm = info['dbm']
             ssid = info['ssid']
             quality = get_signal_quality(dbm)
-            safe_addstr(stdscr, 14, 4, f"SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
-            safe_addstr(stdscr, 15, 4, f"Signal: {dbm} dBm", curses.color_pair(3))
-            safe_addstr(stdscr, 16, 4, f"Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
+            safe_addstr(stdscr, 14, 4, f"📶 SSID: {ssid}", curses.color_pair(2) | curses.A_BOLD)
+            safe_addstr(stdscr, 15, 4, f"📊 Signal: {dbm} dBm", curses.color_pair(3))
+            safe_addstr(stdscr, 16, 4, f"⭐ Quality: {quality}", curses.color_pair(4) if dbm >= -60 else curses.color_pair(1))
             
             bar_length = 30
             filled = int((dbm + 100) / 50 * bar_length)
@@ -1627,7 +1427,7 @@ def hardware_controls_menu(stdscr):
             safe_addstr(stdscr, 17, 4, f"[{bar}]", curses.color_pair(3))
             
             if error_note:
-                safe_addstr(stdscr, 19, 4, f"Warning: {error_note}", curses.color_pair(1) | curses.A_BOLD)
+                safe_addstr(stdscr, 19, 4, f"⚠️ {error_note}", curses.color_pair(1) | curses.A_BOLD)
             
             if wifi_list:
                 safe_addstr(stdscr, 20, 4, "Nearby Networks:", curses.color_pair(5) | curses.A_BOLD)
@@ -1638,9 +1438,9 @@ def hardware_controls_menu(stdscr):
                 status_color = curses.color_pair(4) if "Connected" in connection_status else curses.color_pair(1)
                 safe_addstr(stdscr, 28, 4, f"Status: {connection_status}", status_color | curses.A_BOLD)
             
-            safe_addstr(stdscr, 30, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+            safe_addstr(stdscr, 30, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
             safe_addstr(stdscr, 31, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-            safe_addstr(stdscr, 32, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+            safe_addstr(stdscr, 32, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
             stdscr.noutrefresh()
             curses.doupdate()
             
@@ -1655,13 +1455,13 @@ def hardware_controls_menu(stdscr):
                             toggle_flashlight(flash_active)
                             vibrate_phone(100)
                         elif 6 <= my <= 8 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 6, 4, "┌" + "-" * 50 + "┐", 4)
+                            play_button_shrink(stdscr, 6, 4, "┌" + "─" * 50 + "┐", 4)
                             vibrate_phone(1000)
-                            safe_addstr(stdscr, 9, 4, "Vibrating...", curses.color_pair(4))
+                            safe_addstr(stdscr, 9, 4, "📳 Vibrating...", curses.color_pair(4))
                             stdscr.refresh()
                             time.sleep(0.3)
                         elif 10 <= my <= 12 and 4 <= mx <= 54:
-                            play_button_shrink(stdscr, 10, 4, "┌" + "-" * 50 + "┐", 3)
+                            play_button_shrink(stdscr, 10, 4, "┌" + "─" * 50 + "┐", 3)
                             wifi_settings_menu(stdscr)
                         elif wifi_list and 22 <= my < 22 + len(wifi_list):
                             clicked_idx = my - 22
@@ -1678,7 +1478,7 @@ def hardware_controls_menu(stdscr):
                                 connection_status = "Connected!" if success else "Connection failed (root needed)"
                                 stdscr.timeout(timeout_ms)
                         elif 30 <= my <= 32 and 4 <= mx <= 24:
-                            play_button_shrink(stdscr, 30, 4, "┌" + "-" * 20 + "┐", 1)
+                            play_button_shrink(stdscr, 30, 4, "┌" + "─" * 20 + "┐", 1)
                             break
                 except: pass
             elif key == ord('\n') or key == ord('q'):
@@ -1690,6 +1490,11 @@ def hardware_controls_menu(stdscr):
 
 def settings_menu(stdscr):
     global current_hz, current_fps, timeout_ms, selected_hz, selected_fps
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     
@@ -1700,12 +1505,12 @@ def settings_menu(stdscr):
     
     while True:
         stdscr.erase()
-        safe_addstr(stdscr, 1, 4, "ADVANCED SETTINGS", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 1, 4, "⚙️ ADVANCED SETTINGS", curses.color_pair(5) | curses.A_BOLD)
         
-        safe_addstr(stdscr, 3, 4, "--- GRAPHICS SETTINGS ---", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 3, 4, "━━━ GRAPHICS SETTINGS ━━━", curses.color_pair(4) | curses.A_BOLD)
         safe_addstr(stdscr, 4, 4, f"Active Mode: {current_hz}Hz | Render: {current_fps} FPS", curses.color_pair(3))
         if error_msg:
-            safe_addstr(stdscr, 6, 4, f"Error: {error_msg}", curses.color_pair(1) | curses.A_BOLD)
+            safe_addstr(stdscr, 6, 4, f"⚠️ {error_msg}", curses.color_pair(1) | curses.A_BOLD)
         
         safe_addstr(stdscr, 8, 4, "Refresh Rate (Hz):", curses.color_pair(2) | curses.A_BOLD)
         hz60_attr = curses.color_pair(3) | curses.A_REVERSE if selected_hz == 60 else curses.color_pair(2)
@@ -1719,25 +1524,25 @@ def settings_menu(stdscr):
             f_attr = curses.color_pair(5) | curses.A_REVERSE if selected_fps == f_val else curses.color_pair(2)
             safe_addstr(stdscr, 12 + (idx // 4) * 2, 4 + (idx % 4) * 13, f"[ {f_val} ]", f_attr)
         
-        safe_addstr(stdscr, 16, 4, "--- TOOL MAINTENANCE ---", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 17, 4, "┌" + "-" * 54 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 16, 4, "━━━ TOOL MAINTENANCE ━━━", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, 17, 4, "┌" + "─" * 54 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, 18, 4, "│  [CLEAR]  Fix BUGs & Freeze Issues         │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 19, 4, "└" + "-" * 54 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 19, 4, "└" + "─" * 54 + "┘", curses.color_pair(1))
         
         if clear_msg:
-            safe_addstr(stdscr, 21, 4, f" {clear_msg}", curses.color_pair(4))
+            safe_addstr(stdscr, 21, 4, f"✅ {clear_msg}", curses.color_pair(4))
         
-        safe_addstr(stdscr, 23, 4, "┌" + "-" * 54 + "┐", curses.color_pair(3))
-        safe_addstr(stdscr, 24, 4, "│      [ HARDWARE & WIFI CONTROL ]        │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 25, 4, "└" + "-" * 54 + "┘", curses.color_pair(3))
+        safe_addstr(stdscr, 23, 4, "┌" + "─" * 54 + "┐", curses.color_pair(3))
+        safe_addstr(stdscr, 24, 4, "│      [ HARDWARE & WIFI CONTROL 🔧 ]        │", curses.color_pair(3) | curses.A_BOLD)
+        safe_addstr(stdscr, 25, 4, "└" + "─" * 54 + "┘", curses.color_pair(3))
         
-        safe_addstr(stdscr, 27, 4, "┌" + "-" * 54 + "┐", curses.color_pair(5))
-        safe_addstr(stdscr, 28, 4, "│          [ APPLY CHANGES ]               │", curses.color_pair(5) | curses.A_BOLD)
-        safe_addstr(stdscr, 29, 4, "└" + "-" * 54 + "┘", curses.color_pair(5))
+        safe_addstr(stdscr, 27, 4, "┌" + "─" * 54 + "┐", curses.color_pair(5))
+        safe_addstr(stdscr, 28, 4, "│          [ APPLY CHANGES ⚡ ]               │", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 29, 4, "└" + "─" * 54 + "┘", curses.color_pair(5))
         
-        safe_addstr(stdscr, 31, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 31, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, 32, 4, "│   [ Go Back ]    │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 33, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 33, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
         
         stdscr.noutrefresh()
         curses.doupdate()
@@ -1774,22 +1579,22 @@ def settings_menu(stdscr):
                             selected_fps = 120
                     
                     elif 17 <= my <= 19 and 4 <= mx <= 58:
-                        play_button_shrink(stdscr, 17, 4, "┌" + "-" * 54 + "┐", 1)
+                        play_button_shrink(stdscr, 17, 4, "┌" + "─" * 54 + "┐", 1)
                         try:
                             import gc
                             gc.collect()
                             update_timeout()
-                            clear_msg = "Tool cleaned! BUGs and Freeze cleared."
+                            clear_msg = "Tool cleaned! BUGs and Freeze cleared. ✅"
                             stdscr.timeout(timeout_ms)
                         except:
                             clear_msg = "Clean failed, restart tool."
                     
                     elif 23 <= my <= 25 and 4 <= mx <= 58:
-                        play_button_shrink(stdscr, 23, 4, "┌" + "-" * 54 + "┐", 3)
+                        play_button_shrink(stdscr, 23, 4, "┌" + "─" * 54 + "┐", 3)
                         hardware_controls_menu(stdscr)
                     
                     elif 27 <= my <= 29 and 4 <= mx <= 58:
-                        play_button_shrink(stdscr, 27, 4, "┌" + "-" * 54 + "┐", 5)
+                        play_button_shrink(stdscr, 27, 4, "┌" + "─" * 54 + "┐", 5)
                         saved_score = load_antutu_score()
                         if selected_fps == 120:
                             if saved_score == 0:
@@ -1800,12 +1605,12 @@ def settings_menu(stdscr):
                                 current_hz = selected_hz
                                 current_fps = selected_fps
                                 update_timeout()
-                                clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                                clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS ✅"
                         else:
                             current_hz = selected_hz
                             current_fps = selected_fps
                             update_timeout()
-                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS ✅"
                         
                         stdscr.timeout(timeout_ms)
                     
@@ -1818,7 +1623,7 @@ def settings_menu(stdscr):
                 import gc
                 gc.collect()
                 update_timeout()
-                clear_msg = "Tool cleaned!"
+                clear_msg = "Tool cleaned! ✅"
             except:
                 clear_msg = "Clean failed."
         
@@ -1833,12 +1638,12 @@ def settings_menu(stdscr):
                     current_hz = selected_hz
                     current_fps = selected_fps
                     update_timeout()
-                    clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                    clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS ✅"
             else:
                 current_hz = selected_hz
                 current_fps = selected_fps
                 update_timeout()
-                clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS ✅"
         
         elif key == ord('h') or key == ord('H'):
             hardware_controls_menu(stdscr)
@@ -1865,23 +1670,28 @@ def print_kurd_mars_logo(stdscr):
 
 def termux_setup_menu(stdscr):
     global timeout_ms
+    
+    # Security check
+    if not security_check(stdscr):
+        return
+    
     play_transition(stdscr)
     stdscr.timeout(timeout_ms)
     while True:
         stdscr.erase()
         safe_addstr(stdscr, 1, 4, "=== Termux & Kali Linux Setup ===", curses.color_pair(5) | curses.A_BOLD)
-        safe_addstr(stdscr, 3, 4, "┌" + "-" * 40 + "┐", curses.color_pair(2))
+        safe_addstr(stdscr, 3, 4, "┌" + "─" * 40 + "┐", curses.color_pair(2))
         safe_addstr(stdscr, 4, 4, "│    1 - Update Termux            │", curses.color_pair(2) | curses.A_BOLD)
-        safe_addstr(stdscr, 5, 4, "└" + "-" * 40 + "┘", curses.color_pair(2))
-        safe_addstr(stdscr, 7, 4, "┌" + "-" * 40 + "┐", curses.color_pair(3))
+        safe_addstr(stdscr, 5, 4, "└" + "─" * 40 + "┘", curses.color_pair(2))
+        safe_addstr(stdscr, 7, 4, "┌" + "─" * 40 + "┐", curses.color_pair(3))
         safe_addstr(stdscr, 8, 4, "│    2 - Install Kali NetHunter   │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 9, 4, "└" + "-" * 40 + "┘", curses.color_pair(3))
-        safe_addstr(stdscr, 11, 4, "┌" + "-" * 40 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 9, 4, "└" + "─" * 40 + "┘", curses.color_pair(3))
+        safe_addstr(stdscr, 11, 4, "┌" + "─" * 40 + "┐", curses.color_pair(4))
         safe_addstr(stdscr, 12, 4, "│    3 - RUN KALI LINUX (nh)      │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 13, 4, "└" + "-" * 40 + "┘", curses.color_pair(4))
-        safe_addstr(stdscr, 16, 4, "┌" + "-" * 20 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 13, 4, "└" + "─" * 40 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, 16, 4, "┌" + "─" * 20 + "┐", curses.color_pair(1))
         safe_addstr(stdscr, 17, 4, "│   [Go Back]   │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 18, 4, "└" + "-" * 20 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 18, 4, "└" + "─" * 20 + "┘", curses.color_pair(1))
         stdscr.noutrefresh()
         curses.doupdate()
         key = stdscr.getch()
@@ -1890,7 +1700,7 @@ def termux_setup_menu(stdscr):
                 _, mx, my, _, bstate = curses.getmouse()
                 if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
                     if 3 <= my <= 5 and 4 <= mx <= 44:
-                        play_button_shrink(stdscr, 3, 4, "┌" + "-" * 40 + "┐", 2)
+                        play_button_shrink(stdscr, 3, 4, "┌" + "─" * 40 + "┐", 2)
                         curses.endwin()
                         os.system("clear")
                         print("[+] Running Termux Update...")
@@ -1899,7 +1709,7 @@ def termux_setup_menu(stdscr):
                         stdscr = curses.initscr()
                         stdscr.timeout(timeout_ms)
                     elif 7 <= my <= 9 and 4 <= mx <= 44:
-                        play_button_shrink(stdscr, 7, 4, "┌" + "-" * 40 + "┐", 3)
+                        play_button_shrink(stdscr, 7, 4, "┌" + "─" * 40 + "┐", 3)
                         curses.endwin()
                         os.system("clear")
                         print("[*] Installing dependencies...")
@@ -1911,7 +1721,7 @@ def termux_setup_menu(stdscr):
                         stdscr = curses.initscr()
                         stdscr.timeout(timeout_ms)
                     elif 11 <= my <= 13 and 4 <= mx <= 44:
-                        play_button_shrink(stdscr, 11, 4, "┌" + "-" * 40 + "┐", 4)
+                        play_button_shrink(stdscr, 11, 4, "┌" + "─" * 40 + "┐", 4)
                         curses.endwin()
                         os.system("clear")
                         print("[*] Booting Kali Linux NetHunter...\n")
@@ -1920,12 +1730,25 @@ def termux_setup_menu(stdscr):
                         stdscr = curses.initscr()
                         stdscr.timeout(timeout_ms)
                     elif 16 <= my <= 18 and 4 <= mx <= 24:
-                        play_button_shrink(stdscr, 16, 4, "┌" + "-" * 20 + "┐", 1)
+                        play_button_shrink(stdscr, 16, 4, "┌" + "─" * 20 + "┐", 1)
                         break
             except: pass
 
 def main(stdscr):
     global timeout_ms
+    
+    # Initial security check
+    banned, msg = is_banned()
+    if banned:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        safe_addstr(stdscr, h//2 - 2, w//2 - 20, "🔒 ACCESS DENIED", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, h//2, w//2 - 20, msg[:w-10], curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, h//2 + 2, w//2 - 20, "Contact administrator.", curses.color_pair(3))
+        stdscr.refresh()
+        time.sleep(5)
+        return
+    
     try: curses.mouseinterval(0)
     except: pass
     curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
@@ -1936,43 +1759,39 @@ def main(stdscr):
         stdscr.erase()
         print_kurd_mars_logo(stdscr)
         
-        safe_addstr(stdscr, 8, 4,  "┌" + "-" * 27 + "┐", curses.color_pair(5))
+        safe_addstr(stdscr, 8, 4,  "┌" + "─" * 27 + "┐", curses.color_pair(5))
         safe_addstr(stdscr, 9, 4,  "│   Termux & Kali       │", curses.color_pair(5) | curses.A_BOLD)
-        safe_addstr(stdscr, 10, 4, "└" + "-" * 27 + "┘", curses.color_pair(5))
+        safe_addstr(stdscr, 10, 4, "└" + "─" * 27 + "┘", curses.color_pair(5))
         
-        safe_addstr(stdscr, 8, 35, "┌" + "-" * 27 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 9, 35, "│   Chrome Dino     │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 10, 35, "└" + "-" * 27 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, 8, 35, "┌" + "─" * 27 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 9, 35, "│   Chrome Dino 🦕     │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 10, 35, "└" + "─" * 27 + "┘", curses.color_pair(4))
         
-        safe_addstr(stdscr, 11, 4, "┌" + "-" * 58 + "┐", curses.color_pair(3))
+        safe_addstr(stdscr, 11, 4, "┌" + "─" * 58 + "┐", curses.color_pair(3))
         safe_addstr(stdscr, 12, 4, "│          [ TEST ANTUTU v11 ]               │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 13, 4, "└" + "-" * 58 + "┘", curses.color_pair(3))
+        safe_addstr(stdscr, 13, 4, "└" + "─" * 58 + "┘", curses.color_pair(3))
         
-        safe_addstr(stdscr, 14, 4, "┌" + "-" * 58 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 15, 4, "│          [ TERMUX TOOLS ]                │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 16, 4, "└" + "-" * 58 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, 14, 4, "┌" + "─" * 58 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 15, 4, "│          [ TERMUX TOOLS 📦 ]                │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 16, 4, "└" + "─" * 58 + "┘", curses.color_pair(4))
         
-        safe_addstr(stdscr, 17, 4, "┌" + "-" * 27 + "┐", curses.color_pair(3))
-        safe_addstr(stdscr, 18, 4, "│   Devices Control   │", curses.color_pair(3) | curses.A_BOLD)
-        safe_addstr(stdscr, 19, 4, "└" + "-" * 27 + "┘", curses.color_pair(3))
+        safe_addstr(stdscr, 17, 4, "┌" + "─" * 27 + "┐", curses.color_pair(3))
+        safe_addstr(stdscr, 18, 4, "│   Devices Control 🔌  │", curses.color_pair(3) | curses.A_BOLD)
+        safe_addstr(stdscr, 19, 4, "└" + "─" * 27 + "┘", curses.color_pair(3))
         
-        safe_addstr(stdscr, 17, 35, "┌" + "-" * 27 + "┐", curses.color_pair(5))
-        safe_addstr(stdscr, 18, 35, "│  Advanced Settings  │", curses.color_pair(5) | curses.A_BOLD)
-        safe_addstr(stdscr, 19, 35, "└" + "-" * 27 + "┘", curses.color_pair(5))
+        safe_addstr(stdscr, 17, 35, "┌" + "─" * 27 + "┐", curses.color_pair(5))
+        safe_addstr(stdscr, 18, 35, "│  Advanced Settings ⚙️ │", curses.color_pair(5) | curses.A_BOLD)
+        safe_addstr(stdscr, 19, 35, "└" + "─" * 27 + "┘", curses.color_pair(5))
         
-        safe_addstr(stdscr, 20, 4, "┌" + "-" * 27 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 21, 4, "│   Gemini Chat    │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 22, 4, "└" + "-" * 27 + "┘", curses.color_pair(4))
-        
-        safe_addstr(stdscr, 23, 4, "┌" + "-" * 27 + "┐", curses.color_pair(4))
-        safe_addstr(stdscr, 24, 4, "│   Update Tool     │", curses.color_pair(4) | curses.A_BOLD)
-        safe_addstr(stdscr, 25, 4, "└" + "-" * 27 + "┘", curses.color_pair(4))
+        safe_addstr(stdscr, 20, 4, "┌" + "─" * 27 + "┐", curses.color_pair(4))
+        safe_addstr(stdscr, 21, 4, "│   Update Tool 🔄    │", curses.color_pair(4) | curses.A_BOLD)
+        safe_addstr(stdscr, 22, 4, "└" + "─" * 27 + "┘", curses.color_pair(4))
         
         width = 80
         exit_x = (width - 22) // 2
-        safe_addstr(stdscr, 26, exit_x, "┌" + "-" * 22 + "┐", curses.color_pair(1))
-        safe_addstr(stdscr, 27, exit_x, "│       [ Exit ]        │", curses.color_pair(1) | curses.A_BOLD)
-        safe_addstr(stdscr, 28, exit_x, "└" + "-" * 22 + "┘", curses.color_pair(1))
+        safe_addstr(stdscr, 23, exit_x, "┌" + "─" * 22 + "┐", curses.color_pair(1))
+        safe_addstr(stdscr, 24, exit_x, "│       [ Exit ]        │", curses.color_pair(1) | curses.A_BOLD)
+        safe_addstr(stdscr, 25, exit_x, "└" + "─" * 22 + "┘", curses.color_pair(1))
 
         stdscr.noutrefresh()
         curses.doupdate()
@@ -1983,30 +1802,27 @@ def main(stdscr):
                 _, mx, my, _, bstate = curses.getmouse()
                 if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
                     if 8 <= my <= 10 and 4 <= mx <= 31:
-                        play_button_shrink(stdscr, 8, 4, "┌" + "-" * 27 + "┐", 5)
+                        play_button_shrink(stdscr, 8, 4, "┌" + "─" * 27 + "┐", 5)
                         termux_setup_menu(stdscr)
                     elif 8 <= my <= 10 and 35 <= mx <= 62:
-                        play_button_shrink(stdscr, 8, 35, "┌" + "-" * 27 + "┐", 4)
+                        play_button_shrink(stdscr, 8, 35, "┌" + "─" * 27 + "┐", 4)
                         run_fps_test_game(stdscr)
                     elif 11 <= my <= 13 and 4 <= mx <= 62:
-                        play_button_shrink(stdscr, 11, 4, "┌" + "-" * 58 + "┐", 3)
+                        play_button_shrink(stdscr, 11, 4, "┌" + "─" * 58 + "┐", 3)
                         antutu_test_menu(stdscr)
                     elif 14 <= my <= 16 and 4 <= mx <= 62:
-                        play_button_shrink(stdscr, 14, 4, "┌" + "-" * 58 + "┐", 4)
+                        play_button_shrink(stdscr, 14, 4, "┌" + "─" * 58 + "┐", 4)
                         termux_menu(stdscr)
                     elif 17 <= my <= 19 and 4 <= mx <= 31:
-                        play_button_shrink(stdscr, 17, 4, "┌" + "-" * 27 + "┐", 3)
+                        play_button_shrink(stdscr, 17, 4, "┌" + "─" * 27 + "┐", 3)
                         devices_menu(stdscr)
                     elif 17 <= my <= 19 and 35 <= mx <= 62:
-                        play_button_shrink(stdscr, 17, 35, "┌" + "-" * 27 + "┐", 5)
+                        play_button_shrink(stdscr, 17, 35, "┌" + "─" * 27 + "┐", 5)
                         settings_menu(stdscr)
                     elif 20 <= my <= 22 and 4 <= mx <= 31:
-                        play_button_shrink(stdscr, 20, 4, "┌" + "-" * 27 + "┐", 4)
-                        gemini_chat(stdscr)
-                    elif 23 <= my <= 25 and 4 <= mx <= 31:
-                        play_button_shrink(stdscr, 23, 4, "┌" + "-" * 27 + "┐", 4)
+                        play_button_shrink(stdscr, 20, 4, "┌" + "─" * 27 + "┐", 4)
                         update_tool(stdscr)
-                    elif 26 <= my <= 28 and exit_x <= mx <= exit_x + 22:
+                    elif 23 <= my <= 25 and exit_x <= mx <= exit_x + 22:
                         break
             except: pass
 
