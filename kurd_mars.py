@@ -1,4 +1,3 @@
-
 import os
 import sys
 import time
@@ -562,12 +561,19 @@ def safe_hline(stdscr, y, x, ch, n, attr=0):
             stdscr.hline(y, x, ch, min(n, width - x), attr)
     except: pass
 
+# ==========================================
+# SPEED OPTIMIZED TRANSITIONS
+# ==========================================
 def play_transition(stdscr):
+    """Super fast transition - no lag"""
     global current_fps
     height, width = stdscr.getmaxyx()
     mid_y = height // 2
-    steps = max(5, int(current_fps / 6))
-    delay = 0.6 / current_fps
+    
+    # زۆر خێرا - تەنها 2 هەنگاو بۆ خێراترین کاردانەوە
+    steps = 2
+    delay = 0.02  # زۆر خێرا
+    
     for i in range(0, mid_y + 1, max(1, mid_y // steps)):
         stdscr.erase()
         safe_hline(stdscr, max(0, mid_y - i), 0, "─", width, curses.color_pair(5))
@@ -576,36 +582,22 @@ def play_transition(stdscr):
         time.sleep(delay)
 
 def play_button_shrink(stdscr, y, x, text, color_pair):
+    """Super fast button animation - NO LAG"""
     global current_fps
     clean_text = text.replace("┌", "").replace("┐", "").replace("└", "").replace("┘", "").replace("│", "").strip()
     box_width = max(len(clean_text) + 4, 30)
+    
+    # نمایش خێرا - تەنها یەک جار بینرێت
     short_box_top = " ┌" + "─" * (box_width - 2) + "┐ "
     short_box_mid = f" │ {clean_text.center(box_width - 4)} │ "
     short_box_bot = " └" + "─" * (box_width - 2) + "┘ "
-    steps = max(3, int(current_fps / 15))
-    delay = 0.8 / current_fps
+    
+    # ڕاستەوخۆ نمایش بکە - بەبێ ئەنیمەیشنی درێژ
     safe_addstr(stdscr, y, x, short_box_top, curses.color_pair(color_pair) | curses.A_BOLD)
     safe_addstr(stdscr, y+1, x, short_box_mid, curses.color_pair(color_pair) | curses.A_BOLD)
     safe_addstr(stdscr, y+2, x, short_box_bot, curses.color_pair(color_pair) | curses.A_BOLD)
     stdscr.refresh()
-    time.sleep(delay * 0.3)
-    for step in range(steps):
-        ratio = 1.0 - (step / steps) * 0.25
-        new_width = max(10, int(box_width * ratio))
-        short_top = " ┌" + "─" * (new_width - 2) + "┐ "
-        mid_text = clean_text.center(new_width - 4)
-        short_mid = f" │ {mid_text} │ " if len(mid_text) < new_width - 4 else f" │{clean_text[:new_width-6]}│ "
-        short_bot = " └" + "─" * (new_width - 2) + "┘ "
-        safe_addstr(stdscr, y, x, short_top, curses.color_pair(color_pair) | curses.A_BOLD)
-        safe_addstr(stdscr, y+1, x, short_mid, curses.color_pair(color_pair) | curses.A_BOLD)
-        safe_addstr(stdscr, y+2, x, short_bot, curses.color_pair(color_pair) | curses.A_BOLD)
-        stdscr.refresh()
-        time.sleep(delay * 0.2)
-    safe_addstr(stdscr, y, x, short_box_top, curses.color_pair(color_pair) | curses.A_BOLD)
-    safe_addstr(stdscr, y+1, x, short_box_mid, curses.color_pair(color_pair) | curses.A_BOLD)
-    safe_addstr(stdscr, y+2, x, short_box_bot, curses.color_pair(color_pair) | curses.A_BOLD)
-    stdscr.refresh()
-    time.sleep(delay * 0.2)
+    time.sleep(0.02)  # زۆر خێرا
 
 def get_user_input(stdscr, y, x, prompt, mask=False):
     curses.curs_set(1)
@@ -641,44 +633,44 @@ def update_tool(stdscr):
     height, width = stdscr.getmaxyx()
     safe_addstr(stdscr, 2, width//2 - 15, "CHECKING FOR UPDATES...", curses.color_pair(5) | curses.A_BOLD)
     stdscr.refresh()
-    time.sleep(0.5)
+    time.sleep(0.2)  # خێراتر
     try:
         for step, action in enumerate(["Fetching updates...", "Checking changes...", "Updating..."]):
             safe_addstr(stdscr, 4 + step, width//2 - 15, action, curses.color_pair(3))
             stdscr.refresh()
             if step == 0:
-                subprocess.run("git fetch", shell=True, capture_output=True, timeout=10)
+                subprocess.run("git fetch", shell=True, capture_output=True, timeout=5)  # خێراتر
             elif step == 1:
-                status = subprocess.run("git status -uno", shell=True, capture_output=True, text=True, timeout=5)
+                status = subprocess.run("git status -uno", shell=True, capture_output=True, text=True, timeout=3)
                 if "up to date" in status.stdout:
                     safe_addstr(stdscr, 7, width//2 - 15, "NO UPDATE AVAILABLE", curses.color_pair(4) | curses.A_BOLD)
                     safe_addstr(stdscr, 8, width//2 - 15, "Already up to date!", curses.color_pair(2))
                     stdscr.refresh()
-                    time.sleep(2)
+                    time.sleep(1)
                     return False
             else:
-                for i in range(101):
-                    if i % 5 == 0:
-                        bar_length = 40
-                        filled = int((i / 100) * bar_length)
-                        bar = "█" * filled + "░" * (bar_length - filled)
-                        safe_addstr(stdscr, 7, width//2 - 20, f"  [{bar}] {i}%", curses.color_pair(4) if i < 100 else curses.color_pair(2))
-                        stdscr.refresh()
-                    time.sleep(0.02)
-                pull = subprocess.run("git pull", shell=True, capture_output=True, text=True, timeout=30)
+                # خێراترین پڕۆگرێس بار
+                for i in range(0, 101, 20):  # پڕۆگرێس خێراتر
+                    bar_length = 40
+                    filled = int((i / 100) * bar_length)
+                    bar = "█" * filled + "░" * (bar_length - filled)
+                    safe_addstr(stdscr, 7, width//2 - 20, f"  [{bar}] {i}%", curses.color_pair(4) if i < 100 else curses.color_pair(2))
+                    stdscr.refresh()
+                    time.sleep(0.01)
+                pull = subprocess.run("git pull", shell=True, capture_output=True, text=True, timeout=15)
                 if "Already up to date" in pull.stdout:
                     safe_addstr(stdscr, 9, width//2 - 15, "NO UPDATE", curses.color_pair(4) | curses.A_BOLD)
                     stdscr.refresh()
-                    time.sleep(2)
+                    time.sleep(1)
                     return False
         safe_addstr(stdscr, 9, width//2 - 15, "UPDATE COMPLETED!", curses.color_pair(4) | curses.A_BOLD)
         stdscr.refresh()
-        time.sleep(2)
+        time.sleep(1)
         return True
     except:
         safe_addstr(stdscr, 7, width//2 - 15, "UPDATE FAILED!", curses.color_pair(1) | curses.A_BOLD)
         stdscr.refresh()
-        time.sleep(2)
+        time.sleep(1)
         return False
 
 # ==========================================
@@ -749,7 +741,7 @@ def termux_setup(stdscr):
         try:
             safe_addstr(stdscr, 6, 4, f"Processing: {idx+1}/{total} - {cmd[:30]}...", curses.color_pair(3))
             stdscr.refresh()
-            result = subprocess.run(cmd, shell=True, timeout=300, capture_output=True)
+            result = subprocess.run(cmd, shell=True, timeout=120, capture_output=True)  # خێراتر
             if result.returncode == 0:
                 success_count += 1
                 safe_addstr(stdscr, 8 + idx, 6, f"✅ {cmd[:30]}... done", curses.color_pair(4))
@@ -779,7 +771,7 @@ def termux_api_install(stdscr):
     try:
         safe_addstr(stdscr, 5, 4, "Installing: termux-api...", curses.color_pair(3))
         stdscr.refresh()
-        result = subprocess.run("pkg install termux-api -y", shell=True, timeout=120, capture_output=True)
+        result = subprocess.run("pkg install termux-api -y", shell=True, timeout=60, capture_output=True)  # خێراتر
         if result.returncode == 0:
             safe_addstr(stdscr, 7, 4, "✅ termux-api installed successfully!", curses.color_pair(4))
         else:
@@ -806,8 +798,8 @@ def devices_menu(stdscr):
         safe_addstr(stdscr, 1, 4, "Installing Android Tools...", curses.color_pair(5) | curses.A_BOLD)
         safe_addstr(stdscr, 3, 4, "Please wait...", curses.color_pair(2))
         stdscr.refresh()
-        subprocess.run("pkg install android-tools -y", shell=True, timeout=120)
-        subprocess.run("pkg install termux-api -y", shell=True, timeout=60)
+        subprocess.run("pkg install android-tools -y", shell=True, timeout=60)  # خێراتر
+        subprocess.run("pkg install termux-api -y", shell=True, timeout=30)
     except: pass
     while True:
         stdscr.erase()
@@ -885,7 +877,7 @@ def adb_command_mode(stdscr):
             safe_addstr(stdscr, 1, 4, "Executing...", curses.color_pair(3))
             stdscr.refresh()
             try:
-                result = subprocess.run(cmd_input, shell=True, timeout=30, capture_output=True, text=True)
+                result = subprocess.run(cmd_input, shell=True, timeout=15, capture_output=True, text=True)  # خێراتر
                 output = result.stdout + result.stderr
                 stdscr.erase()
                 safe_addstr(stdscr, 1, 4, "Command Output:", curses.color_pair(4) | curses.A_BOLD)
@@ -944,7 +936,7 @@ def fastboot_command_mode(stdscr):
             safe_addstr(stdscr, 1, 4, "Executing...", curses.color_pair(3))
             stdscr.refresh()
             try:
-                result = subprocess.run(cmd_input, shell=True, timeout=30, capture_output=True, text=True)
+                result = subprocess.run(cmd_input, shell=True, timeout=15, capture_output=True, text=True)
                 output = result.stdout + result.stderr
                 stdscr.erase()
                 safe_addstr(stdscr, 1, 4, "Command Output:", curses.color_pair(4) | curses.A_BOLD)
@@ -969,7 +961,7 @@ def fastboot_command_mode(stdscr):
 def get_wifi_info():
     info = {'ssid': 'Unknown', 'dbm': -70, 'quality': 'Poor'}
     try:
-        result = subprocess.check_output("termux-wifi-connectioninfo", shell=True, timeout=3).decode()
+        result = subprocess.check_output("termux-wifi-connectioninfo", shell=True, timeout=2).decode()  # خێراتر
         data = json.loads(result)
         if 'ssid' in data:
             info['ssid'] = data['ssid']
@@ -999,7 +991,7 @@ def get_signal_quality(dbm):
 def scan_wifi_devices():
     devices = []
     try:
-        result = subprocess.check_output("arp -a", shell=True, timeout=3).decode()
+        result = subprocess.check_output("arp -a", shell=True, timeout=2).decode()  # خێراتر
         for line in result.split('\n'):
             if '(' in line and ')' in line:
                 parts = line.split()
@@ -1014,7 +1006,7 @@ def scan_wifi_devices():
 
 def get_wifi_location():
     try:
-        result = subprocess.check_output("curl -s ipinfo.io/city", shell=True, timeout=3).decode().strip()
+        result = subprocess.check_output("curl -s ipinfo.io/city", shell=True, timeout=2).decode().strip()  # خێراتر
         if result and len(result) > 2:
             return result
     except: pass
@@ -1097,7 +1089,7 @@ def wifi_ar_monitor(stdscr):
     if not security_check(stdscr):
         return
     play_transition(stdscr)
-    stdscr.timeout(300)
+    stdscr.timeout(200)  # خێراتر
     running = True
     while running:
         try:
@@ -1198,7 +1190,7 @@ def wifi_location(stdscr):
                 os.system("clear")
                 print("\nGetting IP Location...")
                 try:
-                    result = subprocess.check_output("curl -s ipinfo.io", shell=True, timeout=10).decode()
+                    result = subprocess.check_output("curl -s ipinfo.io", shell=True, timeout=5).decode()  # خێراتر
                     data = json.loads(result)
                     print(f"\nIP: {data.get('ip', 'Unknown')}")
                     print(f"City: {data.get('city', 'Unknown')}")
@@ -1215,7 +1207,7 @@ def wifi_location(stdscr):
                 os.system("clear")
                 print("\nNetwork Information:")
                 try:
-                    result = subprocess.check_output("ip addr", shell=True, timeout=5).decode()
+                    result = subprocess.check_output("ip addr", shell=True, timeout=3).decode()  # خێراتر
                     print(result[:500])
                 except:
                     print("Failed to get network info")
@@ -1575,7 +1567,7 @@ def hardware_controls_menu(stdscr):
                             vibrate_phone(1000)
                             safe_addstr(stdscr, 9, 4, "Vibrating...", curses.color_pair(4))
                             stdscr.refresh()
-                            time.sleep(0.3)
+                            time.sleep(0.1)  # خێراتر
                         elif 10 <= my <= 12 and 4 <= mx <= 54:
                             play_button_shrink(stdscr, 10, 4, "┌" + "─" * 50 + "┐", 3)
                             wifi_settings_menu(stdscr)
@@ -1603,7 +1595,7 @@ def hardware_controls_menu(stdscr):
     play_transition(stdscr)
 
 # ==========================================
-# ADVANCED SETTINGS
+# ADVANCED SETTINGS - خێراترین هەڵبژاردنەکان
 # ==========================================
 def settings_menu(stdscr):
     global current_hz, current_fps, timeout_ms, selected_hz, selected_fps
@@ -1650,32 +1642,88 @@ def settings_menu(stdscr):
         stdscr.noutrefresh()
         curses.doupdate()
         key = stdscr.getch()
+        
+        # FPS و Hz بە کلیک و کیبۆرد هەردووکی خێرا دەستنیشان بکە
         if key == curses.KEY_MOUSE:
             try:
                 _, mx, my, _, bstate = curses.getmouse()
                 if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
                     error_msg = ""
-                    if my == 9:
-                        if 4 <= mx <= 16:
-                            selected_hz = 60
-                        elif 18 <= mx <= 30:
+                    # کلیک بۆ 60Hz
+                    if my == 9 and 4 <= mx <= 16:
+                        selected_hz = 60
+                        # ڕاستەوخۆ جێبەجێ بکە
+                        current_hz = 60
+                        if selected_fps != 120 or (selected_fps == 120 and current_hz == 120):
+                            current_fps = selected_fps
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                        else:
+                            current_fps = min(selected_fps, 60)
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                        stdscr.timeout(timeout_ms)
+                    # کلیک بۆ 120Hz
+                    elif my == 9 and 18 <= mx <= 30:
+                        saved_score = load_antutu_score()
+                        if saved_score >= 1000000:
                             selected_hz = 120
+                            current_hz = 120
+                            current_fps = selected_fps
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
+                        else:
+                            error_msg = "Run AnTuTu test first! (Score < 1M)"
+                    # کلیک بۆ FPS values
                     elif my == 12:
                         if 4 <= mx <= 14:
                             selected_fps = 10
+                            current_fps = 10
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
                         elif 17 <= mx <= 27:
                             selected_fps = 20
+                            current_fps = 20
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
                         elif 30 <= mx <= 40:
                             selected_fps = 30
+                            current_fps = 30
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
                         elif 43 <= mx <= 53:
                             selected_fps = 45
+                            current_fps = 45
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
                     elif my == 13:
                         if 4 <= mx <= 14:
                             selected_fps = 60
+                            current_fps = 60
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
                         elif 17 <= mx <= 27:
                             selected_fps = 90
+                            current_fps = 90
+                            update_timeout()
+                            clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                            stdscr.timeout(timeout_ms)
                         elif 30 <= mx <= 40:
                             selected_fps = 120
+                            saved_score = load_antutu_score()
+                            if saved_score >= 1000000:
+                                current_fps = 120
+                                update_timeout()
+                                clear_msg = f"Applied: {current_hz}Hz / {current_fps}FPS"
+                                stdscr.timeout(timeout_ms)
+                            else:
+                                error_msg = "Run AnTuTu test first! (Score < 1M)"
                     elif 17 <= my <= 19 and 4 <= mx <= 58:
                         play_button_shrink(stdscr, 17, 4, "┌" + "─" * 54 + "┐", 1)
                         try:
@@ -1711,6 +1759,8 @@ def settings_menu(stdscr):
                     elif 31 <= my <= 33 and 4 <= mx <= 24:
                         break
             except: pass
+        
+        # کیبۆردیش خێرا کاربکە
         elif key == ord('c') or key == ord('C'):
             try:
                 import gc
